@@ -37,6 +37,38 @@ func filterAnnotations(in map[string]string) map[string]string {
 	return out
 }
 
+// nodePoolLabels são as fontes de node pool expostas como LABEL, em ordem de precedência.
+// Managed clouds diferem no nome; o agente normaliza aqui para o backend receber um campo só.
+var nodePoolLabels = []string{
+	"cloud.google.com/gke-nodepool",    // GKE
+	"eks.amazonaws.com/nodegroup",      // EKS
+	"agentpool",                        // AKS
+	"node.kubernetes.io/instancegroup", // genérico (cluster-api e afins)
+}
+
+// nodePoolAnnotations são as fontes expostas como ANNOTATION. O OKE só publica o pool
+// aqui (verificado no oke-no-001): é um OCID, sem nome amigável no nó.
+var nodePoolAnnotations = []string{
+	"oci.oraclecloud.com/node-pool-id", // OKE
+}
+
+// nodePool resolve o pool do nó pela allowlist ordenada (labels antes de annotations).
+// Cluster sem conceito de pool (on-prem, kind) devolve "" — o backend agrupa o idle no
+// cluster nesse caso.
+func nodePool(node *corev1.Node) string {
+	for _, key := range nodePoolLabels {
+		if v := strings.TrimSpace(node.Labels[key]); v != "" {
+			return v
+		}
+	}
+	for _, key := range nodePoolAnnotations {
+		if v := strings.TrimSpace(node.Annotations[key]); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // NodeInventory materializa o inventário de nós. providerID vai CRU — normalização
 // por provedor (ex.: prefixo oci://) é responsabilidade do backend (spec, decisão 1).
 func NodeInventory(nodes []*corev1.Node) []wire.Node {
@@ -46,6 +78,7 @@ func NodeInventory(nodes []*corev1.Node) []wire.Node {
 			Name:                   n.Name,
 			ProviderID:             n.Spec.ProviderID,
 			Labels:                 n.Labels,
+			NodePool:               nodePool(n),
 			CPUCapacityMilli:       n.Status.Capacity.Cpu().MilliValue(),
 			CPUAllocatableMilli:    n.Status.Allocatable.Cpu().MilliValue(),
 			MemoryCapacityBytes:    n.Status.Capacity.Memory().Value(),

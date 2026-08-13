@@ -33,6 +33,51 @@ func TestNodeInventory(t *testing.T) {
 	}
 }
 
+func TestNodePool(t *testing.T) {
+	tests := []struct {
+		name        string
+		labels      map[string]string
+		annotations map[string]string
+		want        string
+	}{
+		{
+			name:        "OKE usa a annotation do node pool",
+			annotations: map[string]string{"oci.oraclecloud.com/node-pool-id": "ocid1.nodepool.oc1.sa-saopaulo-1.aaaa"},
+			want:        "ocid1.nodepool.oc1.sa-saopaulo-1.aaaa",
+		},
+		{
+			name:   "EKS usa o label do nodegroup",
+			labels: map[string]string{"eks.amazonaws.com/nodegroup": "workers-a"},
+			want:   "workers-a",
+		},
+		{
+			name:   "GKE usa o label do node pool",
+			labels: map[string]string{"cloud.google.com/gke-nodepool": "default-pool"},
+			want:   "default-pool",
+		},
+		{
+			name:   "label genérico de pool serve de fallback",
+			labels: map[string]string{"node.kubernetes.io/instancegroup": "grupo-1"},
+			want:   "grupo-1",
+		},
+		{
+			name:        "label vence annotation quando ambos existem",
+			labels:      map[string]string{"cloud.google.com/gke-nodepool": "default-pool"},
+			annotations: map[string]string{"oci.oraclecloud.com/node-pool-id": "ocid1.nodepool.oc1.x"},
+			want:        "default-pool",
+		},
+		{name: "cluster sem conceito de pool devolve vazio", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Labels: tt.labels, Annotations: tt.annotations}}
+			if got := nodePool(node); got != tt.want {
+				t.Fatalf("nodePool() = %q, quer %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPVCInventory_SoBound(t *testing.T) {
 	bound := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "data"},

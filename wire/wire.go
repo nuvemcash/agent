@@ -27,8 +27,12 @@ type Snapshot struct {
 
 // Node é o inventário de um nó no fim da janela.
 type Node struct {
-	Name                   string            `json:"name"`
-	ProviderID             string            `json:"providerId,omitempty"` // OCID puro em OKE; formatos variam por cloud
+	Name       string `json:"name"`
+	ProviderID string `json:"providerId,omitempty"` // OCID puro em OKE; formatos variam por cloud
+	// NodePool identifica o grupo de nós (node pool/nodegroup/agentpool). Resolvido pelo
+	// agente numa allowlist de labels e annotations conhecidos — vazio quando o cluster não
+	// tem o conceito. O backend agrupa a capacidade ociosa por este campo.
+	NodePool               string            `json:"nodePool,omitempty"`
 	Labels                 map[string]string `json:"labels,omitempty"`
 	CPUCapacityMilli       int64             `json:"cpuCapacityMilli"`
 	CPUAllocatableMilli    int64             `json:"cpuAllocatableMilli"`
