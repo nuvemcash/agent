@@ -1,0 +1,10 @@
+# golangci-lint v2 — mesmo espírito do repo api (padrões + govet/staticcheck), formato novo.
+version: "2"
+linters:
+  default: standard
+  settings:
+    staticcheck:
+      checks: ["all"]
+formatters:
+  enable:
+    - gofmt
