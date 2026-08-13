@@ -32,3 +32,16 @@ Se preferir não passar o token via `--set` (shell history), crie um Secret e us
 ## Requisitos
 
 Kubernetes ≥ 1.28 · Helm ≥ 3.8 · saída HTTPS para o endpoint do nuvem.cash.
+
+## Desenvolvimento
+
+Teste e2e local — builda a imagem, sobe um cluster [kind](https://kind.sigs.k8s.io/),
+instala o devsink (receptor de desenvolvimento embutido no próprio binário, `agent
+devsink`) e o chart apontando pra ele, e aguarda até um snapshot com uso chegar:
+
+```bash
+./hack/e2e-kind.sh
+```
+
+Critério de aceite da Fase 2. O script não apaga o cluster ao final; para limpar:
+`kind delete cluster --name agent-e2e`.
