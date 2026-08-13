@@ -98,7 +98,7 @@ func (s *Shipper) post(ctx context.Context, snap wire.Snapshot) (bool, error) {
 	if err != nil {
 		return true, fmt.Errorf("post: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // corpo já lido/descartado; erro de close não é acionável
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		return false, nil
