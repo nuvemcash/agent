@@ -34,6 +34,11 @@ deployment/nuvemcash-agent -n nuvemcash-system` após atualizá-lo).
 - Uso de CPU/memória por pod (kubelet Summary API), agregado por workload
 - Nada de Secrets/ConfigMaps; RBAC estritamente somente-leitura
 
+Sendo honesto sobre o RBAC: `nodes/proxy` é uma permissão ampla do kubelet (é o preço de
+falar com ele via apiserver proxy em vez de TLS direto) — mas o agente só usa essa
+permissão para um `GET stats/summary` por nó. Todo o resto do RBAC é `get`/`list`/`watch`
+mínimo sobre os recursos listados acima.
+
 ## Requisitos
 
 Kubernetes ≥ 1.28 · Helm ≥ 3.8 · saída HTTPS para o endpoint do nuvem.cash.
