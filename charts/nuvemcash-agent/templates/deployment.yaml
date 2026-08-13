@@ -11,6 +11,15 @@ spec:
   template:
     metadata:
       labels: {app.kubernetes.io/name: nuvemcash-agent}
+      annotations:
+        # Muda o hash quando o token rotaciona, forçando um rollout do Deployment no mesmo
+        # `helm upgrade --set connection.token=<novo>` — sem isso, só o Secret seria
+        # atualizado e o pod antigo continuaria rodando com o token velho em memória até
+        # reiniciar por outro motivo. Com existingSecret, o rollout é responsabilidade do
+        # operador (o agente não sabe quando o conteúdo do Secret externo muda).
+        {{- if not .Values.connection.existingSecret }}
+        checksum/token: {{ sha256sum .Values.connection.token }}
+        {{- end }}
     spec:
       serviceAccountName: {{ .Release.Name }}
       securityContext:

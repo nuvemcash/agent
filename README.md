@@ -23,6 +23,11 @@ helm upgrade --install nuvemcash-agent oci://ghcr.io/nuvemcash/charts/nuvemcash-
 Se preferir não passar o token via `--set` (shell history), crie um Secret e use
 `--set connection.existingSecret=<nome>` (chave `token`).
 
+Token rotacionado: o mesmo comando de instalação acima (`helm upgrade` com o token novo)
+já aplica o Secret e reinicia o agente automaticamente. Com `existingSecret`, o rollout do
+Deployment fica por conta de quem opera o Secret externo (`kubectl rollout restart
+deployment/nuvemcash-agent -n nuvemcash-system` após atualizá-lo).
+
 ## O que o agente coleta
 
 - Inventário de nós (capacidade, allocatable, labels, providerID), PVCs e Services LB
