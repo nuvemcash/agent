@@ -92,6 +92,24 @@ func TestWindow_CarregaUltimaAmostraParaProximaJanela(t *testing.T) {
 	}
 }
 
+func TestNewWindowFrom_HorizonteDescartaAmostraVelha(t *testing.T) {
+	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	w := NewWindow(t0)
+	w.Observe(sample("old", t0, 10, 1<<20), meta("app", "old"))                          // Time = t0
+	w.Observe(sample("recent", t0.Add(4*time.Minute), 10, 1<<20), meta("app", "recent")) // Time = t0+4m
+	_ = w.Close(t0.Add(5 * time.Minute))
+
+	newStart := t0.Add(5 * time.Minute) // horizonte de corte: newStart - 3min = t0+2min
+	w2 := NewWindowFrom(w, newStart)
+
+	if _, ok := w2.prev["old"]; ok {
+		t.Fatalf("amostra fora do horizonte (t0) deveria ter sido descartada na rolagem")
+	}
+	if _, ok := w2.prev["recent"]; !ok {
+		t.Fatalf("amostra dentro do horizonte (t0+4m) deveria sobreviver à rolagem")
+	}
+}
+
 func TestResolvePodMeta(t *testing.T) {
 	rs := &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
 		Namespace: "app", Name: "web-abc123",

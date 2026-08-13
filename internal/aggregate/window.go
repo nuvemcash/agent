@@ -90,12 +90,21 @@ func NewWindow(start time.Time) *Window {
 	return &Window{start: start, prev: map[string]collect.PodSample{}, acc: map[string]*wire.WorkloadUsage{}}
 }
 
-// NewWindowFrom preserva as últimas amostras da janela anterior (continuidade do Δ).
+// prevSampleHorizon é o quanto uma amostra sobrevive na rolagem entre janelas. ≥ 2× o
+// scrape default de 60s: pod sem amostra nesse horizonte está morto (não só atrasado) —
+// reter a amostra dele para sempre seria um leak monotônico em cluster com churn de pods.
+const prevSampleHorizon = 3 * time.Minute
+
+// NewWindowFrom preserva as últimas amostras da janela anterior (continuidade do Δ),
+// descartando as que já saíram do horizonte de retenção.
 func NewWindowFrom(prev *Window, start time.Time) *Window {
 	w := NewWindow(start)
 	if prev != nil {
+		cutoff := start.Add(-prevSampleHorizon)
 		for k, v := range prev.prev {
-			w.prev[k] = v
+			if v.Time.After(cutoff) {
+				w.prev[k] = v
+			}
 		}
 	}
 	return w
