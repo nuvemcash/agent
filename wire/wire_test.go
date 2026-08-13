@@ -19,7 +19,7 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 		WindowStart:   ts,
 		WindowEnd:     ts.Add(5 * time.Minute),
 		Nodes: []wire.Node{{
-			Name: "10.0.0.1", ProviderID: "ocid1.instance.oc1..abc",
+			Name: "10.0.0.1", ProviderID: "ocid1.instance.oc1..abc", NodePool: "pool-a",
 			Labels:           map[string]string{"pool": "a"},
 			CPUCapacityMilli: 4000, CPUAllocatableMilli: 3900,
 			MemoryCapacityBytes: 16e9, MemoryAllocatableBytes: 15e9,
@@ -40,7 +40,7 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"schemaVersion":1`, `"clusterUid":"uid-123"`, `"windowStart":"2026-08-13T12:00:00Z"`,
-		`"providerId":"ocid1.instance.oc1..abc"`, `"cpuUsageCoreSeconds":12.5`, `"sampledSeconds":240`,
+		`"providerId":"ocid1.instance.oc1..abc"`, `"nodePool":"pool-a"`, `"cpuUsageCoreSeconds":12.5`, `"sampledSeconds":240`,
 		`"workloadKind":"Deployment"`, `"volumeHandle":"ocid1.volume.oc1..v"`, `"coverageSeconds":300`,
 	} {
 		if !strings.Contains(string(b), want) {
