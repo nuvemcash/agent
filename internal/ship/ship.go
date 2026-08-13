@@ -16,6 +16,7 @@ import (
 	"github.com/nuvemcash/agent/wire"
 )
 
+// Invariante: Enqueue e Flush são chamados da MESMA goroutine (o select loop do main) — não há proteção TOCTOU entre eles além do mutex por operação.
 type Shipper struct {
 	url    string
 	token  string
@@ -41,7 +42,7 @@ func (s *Shipper) Enqueue(snap wire.Snapshot) {
 	if len(s.queue) > s.max {
 		drop := len(s.queue) - s.max
 		s.queue = append([]wire.Snapshot(nil), s.queue[drop:]...)
-		slog.Warn("buffer cheio, descartando janelas antigas", "descartadas", drop)
+		slog.Warn("buffer full, dropping oldest windows", "dropped", drop)
 	}
 }
 
@@ -67,7 +68,7 @@ func (s *Shipper) Flush(ctx context.Context) error {
 			return err // mantém na fila; o loop de envio tenta de novo depois
 		}
 		if err != nil {
-			slog.Error("snapshot rejeitado pelo ingest, descartando", "err", err,
+			slog.Error("snapshot rejected by ingest, dropping", "err", err,
 				"windowStart", next.WindowStart)
 		}
 		s.mu.Lock()
