@@ -1,0 +1,13 @@
+{
+  "node": {"nodeName": "n1"},
+  "pods": [
+    {
+      "podRef": {"name": "web-abc", "namespace": "app", "uid": "u1"},
+      "cpu": {"time": "2026-08-13T12:00:00Z", "usageNanoCores": 15000000, "usageCoreNanoSeconds": 7200000000000},
+      "memory": {"time": "2026-08-13T12:00:00Z", "workingSetBytes": 104857600}
+    },
+    {
+      "podRef": {"name": "semstats", "namespace": "app", "uid": "u2"}
+    }
+  ]
+}
