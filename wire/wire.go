@@ -50,7 +50,7 @@ type WorkloadUsage struct {
 	MemoryWorkingSetByteSeconds float64 `json:"memoryWorkingSetByteSeconds"` // Σ workingSet(bytes)×dt
 	CoverageSeconds             int64   `json:"coverageSeconds"`
 
-	Labels map[string]string `json:"labels,omitempty"` // labels do controlador topo
+	Labels map[string]string `json:"labels,omitempty"` // labels do pod no momento da amostra (fonte padrão de classificação — GKE/SCAD usam labels de pod); hashes de template são removidos pelo agente
 }
 
 // PVC é o inventário de um PersistentVolumeClaim Bound (atribuição direta no backend).

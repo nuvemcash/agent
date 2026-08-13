@@ -32,7 +32,22 @@ type PodMeta struct {
 func ResolvePodMeta(pod *corev1.Pod, rsByKey map[string]*appsv1.ReplicaSet) PodMeta {
 	m := PodMeta{
 		Namespace: pod.Namespace, Name: pod.Name, Node: pod.Spec.NodeName,
-		WorkloadKind: "Pod", WorkloadName: pod.Name, Labels: pod.Labels,
+		WorkloadKind: "Pod", WorkloadName: pod.Name,
+	}
+	// Labels do pod são a fonte de classificação (padrão GKE/SCAD); hashes de template
+	// são ruído por-ReplicaSet/por-revisão e sairiam como cardinalidade falsa nas tags.
+	if len(pod.Labels) > 0 {
+		m.Labels = make(map[string]string, len(pod.Labels))
+		for k, v := range pod.Labels {
+			switch k {
+			case "pod-template-hash", "controller-revision-hash", "pod-template-generation":
+				continue
+			}
+			m.Labels[k] = v
+		}
+		if len(m.Labels) == 0 {
+			m.Labels = nil
+		}
 	}
 	for _, c := range pod.Spec.Containers {
 		m.CPURequestMilli += c.Resources.Requests.Cpu().MilliValue()

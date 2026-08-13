@@ -97,10 +97,11 @@ func TestResolvePodMeta(t *testing.T) {
 		Namespace: "app", Name: "web-abc123",
 		OwnerReferences: []metav1.OwnerReference{{Kind: "Deployment", Name: "web"}},
 	}}
+	podLabels := map[string]string{"app": "web", "pod-template-hash": "abc123"}
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "web-abc123-x",
 			OwnerReferences: []metav1.OwnerReference{{Kind: "ReplicaSet", Name: "web-abc123"}},
-			Labels:          map[string]string{"app": "web"}},
+			Labels:          podLabels},
 		Spec: corev1.PodSpec{NodeName: "n1", Containers: []corev1.Container{{
 			Resources: corev1.ResourceRequirements{Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("250m"),
@@ -111,6 +112,15 @@ func TestResolvePodMeta(t *testing.T) {
 	m := ResolvePodMeta(pod, map[string]*appsv1.ReplicaSet{"app/web-abc123": rs})
 	if m.WorkloadKind != "Deployment" || m.WorkloadName != "web" || m.CPURequestMilli != 250 {
 		t.Fatalf("resolução errada: %+v", m)
+	}
+	if m.Labels["app"] != "web" {
+		t.Fatalf("label 'app' deveria sobreviver ao filtro: %+v", m.Labels)
+	}
+	if _, hasHash := m.Labels["pod-template-hash"]; hasHash {
+		t.Fatalf("pod-template-hash deveria ser filtrado: %+v", m.Labels)
+	}
+	if len(podLabels) != 2 || podLabels["pod-template-hash"] != "abc123" {
+		t.Fatalf("map de labels do pod original não pode ser mutado: %+v", podLabels)
 	}
 
 	bare := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "solo"},
