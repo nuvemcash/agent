@@ -16,7 +16,7 @@ import (
 	"github.com/nuvemcash/agent/wire"
 )
 
-// Invariante: Enqueue e Flush são chamados da MESMA goroutine (o select loop do main) — não há proteção TOCTOU entre eles além do mutex por operação.
+// Shipper — invariante: Enqueue e Flush são chamados da MESMA goroutine (o select loop do main) — não há proteção TOCTOU entre eles além do mutex por operação.
 type Shipper struct {
 	url    string
 	token  string
