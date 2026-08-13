@@ -2,10 +2,40 @@
 package collect
 
 import (
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/nuvemcash/agent/wire"
 )
+
+// lbAnnotationAllowlist são os únicos prefixos de annotation repassados do Service
+// LoadBalancer. O propósito é achar OCID/refs do LB no backend; annotations como
+// kubectl.kubernetes.io/last-applied-configuration embutem o objeto inteiro — sobrecoleta
+// que fere a promessa de read-only mínimo do agente.
+var lbAnnotationAllowlist = []string{
+	"service.beta.kubernetes.io/",
+	"oci.oraclecloud.com/",
+	"service.kubernetes.io/",
+}
+
+// filterAnnotations devolve um novo map só com as chaves permitidas pela allowlist —
+// nunca muta o map de origem (é o mesmo map do objeto lido do informer/lister).
+func filterAnnotations(in map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range in {
+		for _, prefix := range lbAnnotationAllowlist {
+			if strings.HasPrefix(k, prefix) {
+				if out == nil {
+					out = make(map[string]string, len(in))
+				}
+				out[k] = v
+				break
+			}
+		}
+	}
+	return out
+}
 
 // NodeInventory materializa o inventário de nós. providerID vai CRU — normalização
 // por provedor (ex.: prefixo oci://) é responsabilidade do backend (spec, decisão 1).
@@ -37,12 +67,12 @@ func PVCInventory(pvcs []*corev1.PersistentVolumeClaim, pvByName map[string]*cor
 		if pv, ok := pvByName[p.Spec.VolumeName]; ok && pv.Spec.CSI != nil {
 			handle = pv.Spec.CSI.VolumeHandle
 		}
-		cap := p.Status.Capacity[corev1.ResourceStorage]
+		capQty := p.Status.Capacity[corev1.ResourceStorage]
 		out = append(out, wire.PVC{
 			Namespace:     p.Namespace,
 			Name:          p.Name,
 			VolumeHandle:  handle,
-			CapacityBytes: cap.Value(),
+			CapacityBytes: capQty.Value(),
 		})
 	}
 	return out
@@ -55,7 +85,7 @@ func LBInventory(svcs []*corev1.Service) []wire.LoadBalancer {
 		if s.Spec.Type != corev1.ServiceTypeLoadBalancer {
 			continue
 		}
-		lb := wire.LoadBalancer{Namespace: s.Namespace, Name: s.Name, Annotations: s.Annotations}
+		lb := wire.LoadBalancer{Namespace: s.Namespace, Name: s.Name, Annotations: filterAnnotations(s.Annotations)}
 		for _, ing := range s.Status.LoadBalancer.Ingress {
 			if ing.IP != "" {
 				lb.Ingress = append(lb.Ingress, ing.IP)

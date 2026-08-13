@@ -78,3 +78,30 @@ func TestLBInventory_SoLoadBalancer(t *testing.T) {
 		t.Fatalf("LB inventory errado: %+v", out)
 	}
 }
+
+func TestLBInventory_FiltraAnnotationsPorAllowlist(t *testing.T) {
+	original := map[string]string{
+		"service.beta.kubernetes.io/oci-load-balancer-shape": "flexible",
+		"oci.oraclecloud.com/load-balancer-id":               "ocid1.loadbalancer.oc1..lb1",
+		"kubectl.kubernetes.io/last-applied-configuration":   `{"apiVersion":"v1","kind":"Service"}`,
+	}
+	lb := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "app", Name: "web-lb", Annotations: original},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+	}
+	out := LBInventory([]*corev1.Service{lb})
+	if len(out) != 1 {
+		t.Fatalf("esperava 1 LB, veio %d", len(out))
+	}
+	ann := out[0].Annotations
+	if _, has := ann["kubectl.kubernetes.io/last-applied-configuration"]; has {
+		t.Fatalf("last-applied-configuration não deveria sair (sobrecoleta): %+v", ann)
+	}
+	if len(ann) != 2 || ann["service.beta.kubernetes.io/oci-load-balancer-shape"] != "flexible" ||
+		ann["oci.oraclecloud.com/load-balancer-id"] != "ocid1.loadbalancer.oc1..lb1" {
+		t.Fatalf("annotations permitidas deveriam sair intactas: %+v", ann)
+	}
+	if len(original) != 3 {
+		t.Fatalf("map de annotations do Service original não pode ser mutado: %+v", original)
+	}
+}
