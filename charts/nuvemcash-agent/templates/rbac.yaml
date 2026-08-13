@@ -6,11 +6,12 @@ rules:
   - apiGroups: [""]
     resources: ["nodes", "pods", "namespaces", "persistentvolumeclaims", "persistentvolumes", "services"]
     verbs: ["get", "list", "watch"]
+  # ReplicaSets: única leitura fora do core — resolve Pod→ReplicaSet→Deployment via
+  # ownerReferences. STS/DS/Job já são resolvidos pelos ownerReferences do próprio Pod,
+  # sem ler os objetos; jobs/cronjobs só entram quando a resolução Job→CronJob existir
+  # (Fase 4) — RBAC mínimo é promessa do produto.
   - apiGroups: ["apps"]
-    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
+    resources: ["replicasets"]
     verbs: ["get", "list", "watch"]
   # Summary API via apiserver proxy (GET /api/v1/nodes/<node>/proxy/stats/summary).
   # Atenção documentada no README: nodes/proxy é permissão ampla do kubelet — é o preço
