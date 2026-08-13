@@ -23,6 +23,7 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 			Labels:           map[string]string{"pool": "a"},
 			CPUCapacityMilli: 4000, CPUAllocatableMilli: 3900,
 			MemoryCapacityBytes: 16e9, MemoryAllocatableBytes: 15e9,
+			SampledSeconds: 240,
 		}},
 		Usage: []wire.WorkloadUsage{{
 			Node: "10.0.0.1", Namespace: "app", WorkloadKind: "Deployment", WorkloadName: "web",
@@ -39,7 +40,7 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"schemaVersion":1`, `"clusterUid":"uid-123"`, `"windowStart":"2026-08-13T12:00:00Z"`,
-		`"providerId":"ocid1.instance.oc1..abc"`, `"cpuUsageCoreSeconds":12.5`,
+		`"providerId":"ocid1.instance.oc1..abc"`, `"cpuUsageCoreSeconds":12.5`, `"sampledSeconds":240`,
 		`"workloadKind":"Deployment"`, `"volumeHandle":"ocid1.volume.oc1..v"`, `"coverageSeconds":300`,
 	} {
 		if !strings.Contains(string(b), want) {
@@ -53,4 +54,17 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 	if wire.Path != "/ingest/k8s/v1/snapshots" {
 		t.Fatalf("path do contrato mudou: %s", wire.Path)
 	}
+
+	t.Run("omite pvcs e loadBalancers quando vazios", func(t *testing.T) {
+		minimal := wire.Snapshot{SchemaVersion: wire.SchemaVersion, AgentVersion: "0.1.0", ClusterUID: "uid-1"}
+		mb, err := json.Marshal(minimal)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		for _, key := range []string{`"pvcs"`, `"loadBalancers"`} {
+			if strings.Contains(string(mb), key) {
+				t.Fatalf("JSON não deveria conter %s quando a lista está vazia:\n%s", key, mb)
+			}
+		}
+	})
 }

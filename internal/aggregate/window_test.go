@@ -92,6 +92,36 @@ func TestWindow_CarregaUltimaAmostraParaProximaJanela(t *testing.T) {
 	}
 }
 
+func TestWindow_NodeSampledSeconds(t *testing.T) {
+	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	w := NewWindow(t0)
+	w.Observe(sample("p1", t0, 10, 1<<20), meta("app", "p1"))
+	w.Observe(sample("p1", t0.Add(45*time.Second), 13, 1<<20), meta("app", "p1"))
+
+	got := w.NodeSampledSeconds()
+	if got["n1"] != 45 {
+		t.Fatalf("cobertura do nó errada: %+v", got)
+	}
+}
+
+func TestWindow_CoverageSemViesDeTruncamento(t *testing.T) {
+	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	w := NewWindow(t0)
+	dt := 600 * time.Millisecond
+	for i := range 4 {
+		w.Observe(sample("p1", t0.Add(time.Duration(i)*dt), float64(i), 1<<20), meta("app", "p1"))
+	}
+	rows := w.Close(t0.Add(5 * time.Minute))
+	if len(rows) != 1 {
+		t.Fatalf("esperava 1 linha, veio %d", len(rows))
+	}
+	// 3 deltas de 0.6s cada = 1.8s reais. Truncando int64(dt) por amostra (0.6→0) a soma
+	// ficaria 0; acumulando em float64 e arredondando 1x no Close dá round(1.8)=2.
+	if rows[0].CoverageSeconds != 2 {
+		t.Fatalf("coverage deveria acumular sem viés de truncamento por amostra: got %d, want 2", rows[0].CoverageSeconds)
+	}
+}
+
 func TestNewWindowFrom_HorizonteDescartaAmostraVelha(t *testing.T) {
 	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	w := NewWindow(t0)

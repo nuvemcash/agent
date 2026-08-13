@@ -100,6 +100,7 @@ func run() error {
 	// buildSnapshot monta o envelope da janela corrente e a rola para a próxima.
 	buildSnapshot := func(end time.Time) wire.Snapshot {
 		usage := window.Close(end)
+		sampledSeconds := window.NodeSampledSeconds() // captura ANTES de rolar a janela abaixo
 		nodes, _ := nodeLister.List(labels.Everything())
 		pvcs, _ := pvcLister.List(labels.Everything())
 		pvs, _ := pvLister.List(labels.Everything())
@@ -108,13 +109,17 @@ func run() error {
 			pvByName[pv.Name] = pv
 		}
 		svcs, _ := svcLister.List(labels.Everything())
+		nodeInventory := collect.NodeInventory(nodes)
+		for i := range nodeInventory {
+			nodeInventory[i].SampledSeconds = sampledSeconds[nodeInventory[i].Name]
+		}
 		snap := wire.Snapshot{
 			SchemaVersion: wire.SchemaVersion,
 			AgentVersion:  version,
 			ClusterUID:    clusterUID,
 			WindowStart:   window.Start(),
 			WindowEnd:     end,
-			Nodes:         collect.NodeInventory(nodes),
+			Nodes:         nodeInventory,
 			Usage:         usage,
 			PVCs:          collect.PVCInventory(pvcs, pvByName),
 			LoadBalancers: collect.LBInventory(svcs),

@@ -3,6 +3,7 @@
 package aggregate
 
 import (
+	"math"
 	"sort"
 	"time"
 
@@ -81,13 +82,18 @@ func controllerOf(refs []metav1.OwnerReference) *metav1.OwnerReference {
 
 // Window acumula uma janela de agregação.
 type Window struct {
-	start time.Time
-	prev  map[string]collect.PodSample // última amostra por podUID (para Δ e dt)
-	acc   map[string]*wire.WorkloadUsage
+	start        time.Time
+	prev         map[string]collect.PodSample // última amostra por podUID (para Δ e dt)
+	acc          map[string]*wire.WorkloadUsage
+	coverage     map[string]float64 // cobertura por linha (mesma key de acc), em float64 — convertida 1x no Close
+	nodeCoverage map[string]float64 // cobertura por nó em segundos, para NodeSampledSeconds
 }
 
 func NewWindow(start time.Time) *Window {
-	return &Window{start: start, prev: map[string]collect.PodSample{}, acc: map[string]*wire.WorkloadUsage{}}
+	return &Window{
+		start: start, prev: map[string]collect.PodSample{}, acc: map[string]*wire.WorkloadUsage{},
+		coverage: map[string]float64{}, nodeCoverage: map[string]float64{},
+	}
 }
 
 // prevSampleHorizon é o quanto uma amostra sobrevive na rolagem entre janelas. ≥ 2× o
@@ -135,16 +141,30 @@ func (w *Window) Observe(s collect.PodSample, m PodMeta) {
 	row.MemoryWorkingSetByteSeconds += float64(s.WorkingSetBytes) * dt
 	row.CPURequestMilliSeconds += int64(float64(m.CPURequestMilli) * dt)
 	row.MemoryRequestByteSeconds += int64(float64(m.MemoryRequestBytes) * dt)
-	row.CoverageSeconds += int64(dt)
+	// Acumulada em float64 e arredondada 1x no Close — somar int64(dt) a cada amostra
+	// viesa por truncamento (ex.: três dt de 0.6s truncariam para 0 cada, perdendo 1.8s).
+	w.coverage[key] += dt
+	w.nodeCoverage[m.Node] += dt
 }
 
 // Start devolve o início da janela (o main usa no envelope do snapshot).
 func (w *Window) Start() time.Time { return w.start }
 
+// NodeSampledSeconds devolve, por nó, os segundos de cobertura observados nesta janela
+// (arredondados de uma vez, sem viés de truncamento por amostra).
+func (w *Window) NodeSampledSeconds() map[string]int64 {
+	out := make(map[string]int64, len(w.nodeCoverage))
+	for node, secs := range w.nodeCoverage {
+		out[node] = int64(math.Round(secs))
+	}
+	return out
+}
+
 // Close fecha a janela e devolve as linhas ordenadas (determinismo p/ testes e diffs).
 func (w *Window) Close(_ time.Time) []wire.WorkloadUsage {
 	out := make([]wire.WorkloadUsage, 0, len(w.acc))
-	for _, r := range w.acc {
+	for key, r := range w.acc {
+		r.CoverageSeconds = int64(math.Round(w.coverage[key]))
 		out = append(out, *r)
 	}
 	sort.Slice(out, func(i, j int) bool {

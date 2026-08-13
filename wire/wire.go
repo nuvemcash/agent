@@ -34,6 +34,10 @@ type Node struct {
 	CPUAllocatableMilli    int64             `json:"cpuAllocatableMilli"`
 	MemoryCapacityBytes    int64             `json:"memoryCapacityBytes"`
 	MemoryAllocatableBytes int64             `json:"memoryAllocatableBytes"`
+	// SampledSeconds são os segundos de amostragem cobertos neste nó dentro da janela;
+	// 0 = nó não monitorado (kubelet inacessível durante toda a janela) — o backend usa
+	// isso para distinguir ociosidade real de período não monitorado (spec decisão 5).
+	SampledSeconds int64 `json:"sampledSeconds,omitempty"`
 }
 
 // WorkloadUsage agrega o uso de UM workload em UM nó dentro da janela.
@@ -48,7 +52,10 @@ type WorkloadUsage struct {
 	CPUUsageCoreSeconds         float64 `json:"cpuUsageCoreSeconds"`         // Δ do cumulativo do kubelet
 	MemoryRequestByteSeconds    int64   `json:"memoryRequestByteSeconds"`    // Σ requests(bytes)×dt
 	MemoryWorkingSetByteSeconds float64 `json:"memoryWorkingSetByteSeconds"` // Σ workingSet(bytes)×dt
-	CoverageSeconds             int64   `json:"coverageSeconds"`
+	// CoverageSeconds conta a partir da 2ª amostra do pod (a 1ª só estabelece a base do
+	// Δ, sem intervalo); pode exceder a duração nominal da janela quando há gap de scrape
+	// (o intervalo dt observado é maior que o ScrapeInterval configurado).
+	CoverageSeconds int64 `json:"coverageSeconds"`
 
 	Labels map[string]string `json:"labels,omitempty"` // labels do pod no momento da amostra (fonte padrão de classificação — GKE/SCAD usam labels de pod); hashes de template são removidos pelo agente
 }
