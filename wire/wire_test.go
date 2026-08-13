@@ -20,8 +20,8 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 		WindowEnd:     ts.Add(5 * time.Minute),
 		Nodes: []wire.Node{{
 			Name: "10.0.0.1", ProviderID: "ocid1.instance.oc1..abc",
-			Labels:              map[string]string{"pool": "a"},
-			CPUCapacityMilli:    4000, CPUAllocatableMilli: 3900,
+			Labels:           map[string]string{"pool": "a"},
+			CPUCapacityMilli: 4000, CPUAllocatableMilli: 3900,
 			MemoryCapacityBytes: 16e9, MemoryAllocatableBytes: 15e9,
 		}},
 		Usage: []wire.WorkloadUsage{{
