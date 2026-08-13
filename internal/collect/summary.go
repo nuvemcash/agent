@@ -23,10 +23,16 @@ type PodSample struct {
 // ScrapeNode coleta o /stats/summary de UM nó via apiserver proxy (RBAC: nodes/proxy get).
 // Não fala com o kubelet diretamente — funciona em qualquer managed cluster.
 func ScrapeNode(ctx context.Context, client kubernetes.Interface, node string) ([]PodSample, error) {
+	// nodes/proxy é uma chamada long-running para o apiserver — o request-timeout padrão
+	// não se aplica a ela. Sem um deadline próprio aqui, um kubelet mudo trava o select
+	// loop inteiro do agente. NÃO configurar Timeout global no rest.Config: isso mataria
+	// os watches dos informers, que compartilham o mesmo client.
+	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	raw, err := client.CoreV1().RESTClient().Get().
 		Resource("nodes").Name(node).
 		SubResource("proxy").Suffix("stats/summary").
-		DoRaw(ctx)
+		DoRaw(sctx)
 	if err != nil {
 		return nil, fmt.Errorf("summary do nó %s: %w", node, err)
 	}
