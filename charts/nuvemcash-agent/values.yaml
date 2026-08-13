@@ -1,0 +1,25 @@
+image:
+  repository: ghcr.io/nuvemcash/agent
+  tag: ""            # default: appVersion do chart
+  pullPolicy: IfNotPresent
+
+connection:
+  # Token de conexão do cluster (exibido uma única vez na tela do nuvem.cash).
+  token: ""
+  # Alternativa ao --set token: Secret existente com a chave "token".
+  existingSecret: ""
+  url: "https://ingest.nuvem.cash"
+
+# Intervalos de coleta/envio (defaults da spec; só mexa se souber por quê).
+scrapeInterval: "60s"
+shipInterval: "5m"
+
+resources:
+  requests:
+    cpu: 20m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+nodeSelector: {}
+tolerations: []

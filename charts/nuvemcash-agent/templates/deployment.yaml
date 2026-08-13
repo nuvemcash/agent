@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {app.kubernetes.io/name: nuvemcash-agent}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: nuvemcash-agent}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: nuvemcash-agent}
+    spec:
+      serviceAccountName: {{ .Release.Name }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: agent
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: NUVEMCASH_AGENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "nuvemcash-agent.secretName" . }}
+                  key: token
+            - name: NUVEMCASH_AGENT_URL
+              value: {{ .Values.connection.url | quote }}
+            - name: NUVEMCASH_AGENT_SCRAPE_INTERVAL
+              value: {{ .Values.scrapeInterval | quote }}
+            - name: NUVEMCASH_AGENT_SHIP_INTERVAL
+              value: {{ .Values.shipInterval | quote }}
+          ports:
+            - {name: health, containerPort: 8080}
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}

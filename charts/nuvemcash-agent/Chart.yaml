@@ -1,0 +1,7 @@
+apiVersion: v2
+name: nuvemcash-agent            # basename OCI: oci://ghcr.io/nuvemcash/charts/nuvemcash-agent
+description: Agente de coleta do nuvem.cash para clusters Kubernetes (read-only)
+type: application
+version: 0.1.0                   # sobrescrita pela tag no release
+appVersion: "0.1.0"
+kubeVersion: ">=1.28.0-0"
