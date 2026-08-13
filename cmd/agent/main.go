@@ -160,6 +160,10 @@ func run() error {
 					slog.Warn("node scrape failed", "node", n.Name, "err", err)
 					continue
 				}
+				// Cobertura do nó = intervalo entre scrapes bem-sucedidos DELE, contado
+				// uma vez aqui. Contar dentro do laço de pods multiplicaria a cobertura
+				// pela quantidade de pods do nó.
+				window.ObserveNode(n.Name, time.Now().UTC())
 				for _, s := range samples {
 					pod, err := podLister.Pods(s.Namespace).Get(s.PodName)
 					if err != nil {

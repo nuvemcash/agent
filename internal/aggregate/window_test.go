@@ -95,12 +95,48 @@ func TestWindow_CarregaUltimaAmostraParaProximaJanela(t *testing.T) {
 func TestWindow_NodeSampledSeconds(t *testing.T) {
 	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	w := NewWindow(t0)
-	w.Observe(sample("p1", t0, 10, 1<<20), meta("app", "p1"))
-	w.Observe(sample("p1", t0.Add(45*time.Second), 13, 1<<20), meta("app", "p1"))
+	// A cobertura do nó vem do SCRAPE do nó: o 1º só estabelece a base, o 2º fecha 45s.
+	w.ObserveNode("n1", t0)
+	w.ObserveNode("n1", t0.Add(45*time.Second))
 
 	got := w.NodeSampledSeconds()
 	if got["n1"] != 45 {
 		t.Fatalf("cobertura do nó errada: %+v", got)
+	}
+}
+
+func TestWindow_NodeSampledSecondsNaoMultiplicaPorPod(t *testing.T) {
+	// Regressão do dogfood (13/08/2026): a cobertura era somada dentro de Observe, que roda
+	// uma vez por POD — um nó com 72 pods reportava 72× a duração real da janela. Com
+	// sampled_s estourando a hora, o backend clampa em 3600 e NUNCA emite "período não
+	// monitorado", que é justamente o que distingue ociosidade real de hora não observada.
+	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	w := NewWindow(t0)
+	w.ObserveNode("n1", t0)
+	w.ObserveNode("n1", t0.Add(45*time.Second))
+	for _, pod := range []string{"p1", "p2", "p3"} {
+		w.Observe(sample(pod, t0, 10, 1<<20), meta("app", pod))
+		w.Observe(sample(pod, t0.Add(45*time.Second), 13, 1<<20), meta("app", pod))
+	}
+
+	if got := w.NodeSampledSeconds(); got["n1"] != 45 {
+		t.Fatalf("cobertura do nó = %v; 3 pods não podem triplicar a janela de 45s", got)
+	}
+}
+
+func TestWindow_NodeSampledSecondsContinuaEntreJanelas(t *testing.T) {
+	// Sem carregar o último scrape para a janela nova, o 1º scrape de cada janela só
+	// estabeleceria a base e a cobertura perderia um intervalo inteiro por janela.
+	t0 := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	w1 := NewWindow(t0)
+	w1.ObserveNode("n1", t0)
+	w1.ObserveNode("n1", t0.Add(60*time.Second))
+
+	w2 := NewWindowFrom(w1, t0.Add(90*time.Second))
+	w2.ObserveNode("n1", t0.Add(120*time.Second))
+
+	if got := w2.NodeSampledSeconds(); got["n1"] != 60 {
+		t.Fatalf("cobertura da 2ª janela = %v, quer 60 (intervalo desde o scrape anterior)", got)
 	}
 }
 

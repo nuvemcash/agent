@@ -85,14 +85,16 @@ type Window struct {
 	start        time.Time
 	prev         map[string]collect.PodSample // última amostra por podUID (para Δ e dt)
 	acc          map[string]*wire.WorkloadUsage
-	coverage     map[string]float64 // cobertura por linha (mesma key de acc), em float64 — convertida 1x no Close
-	nodeCoverage map[string]float64 // cobertura por nó em segundos, para NodeSampledSeconds
+	coverage     map[string]float64   // cobertura por linha (mesma key de acc), em float64 — convertida 1x no Close
+	nodeCoverage map[string]float64   // cobertura por nó em segundos, para NodeSampledSeconds
+	nodeLastSeen map[string]time.Time // instante do último scrape bem-sucedido de cada nó
 }
 
 func NewWindow(start time.Time) *Window {
 	return &Window{
 		start: start, prev: map[string]collect.PodSample{}, acc: map[string]*wire.WorkloadUsage{},
 		coverage: map[string]float64{}, nodeCoverage: map[string]float64{},
+		nodeLastSeen: map[string]time.Time{},
 	}
 }
 
@@ -112,8 +114,31 @@ func NewWindowFrom(prev *Window, start time.Time) *Window {
 				w.prev[k] = v
 			}
 		}
+		// O último scrape de cada nó também atravessa a janela: sem ele, o 1º scrape da
+		// janela nova só estabeleceria a base e a cobertura perderia um intervalo inteiro
+		// por janela (com scrape de 60s em janela de 5min, 20% a menos).
+		for node, seen := range prev.nodeLastSeen {
+			if seen.After(cutoff) {
+				w.nodeLastSeen[node] = seen
+			}
+		}
 	}
 	return w
+}
+
+// ObserveNode registra que o nó foi amostrado com sucesso no instante t. A cobertura do nó
+// é o intervalo entre scrapes bem-sucedidos DELE — nunca a soma dos pods: Observe roda uma
+// vez por pod, então somar lá multiplicava a cobertura pela quantidade de pods do nó
+// (regressão vista no dogfood: 72 pods reportaram 49× a duração da janela).
+func (w *Window) ObserveNode(node string, t time.Time) {
+	last, ok := w.nodeLastSeen[node]
+	w.nodeLastSeen[node] = t
+	if !ok {
+		return // primeiro scrape do nó: só estabelece a base do intervalo
+	}
+	if d := t.Sub(last).Seconds(); d > 0 {
+		w.nodeCoverage[node] += d
+	}
 }
 
 // Observe registra uma amostra. O Δ é contra a amostra anterior do MESMO pod; regressão
@@ -144,7 +169,6 @@ func (w *Window) Observe(s collect.PodSample, m PodMeta) {
 	// Acumulada em float64 e arredondada 1x no Close — somar int64(dt) a cada amostra
 	// viesa por truncamento (ex.: três dt de 0.6s truncariam para 0 cada, perdendo 1.8s).
 	w.coverage[key] += dt
-	w.nodeCoverage[m.Node] += dt
 }
 
 // Start devolve o início da janela (o main usa no envelope do snapshot).
