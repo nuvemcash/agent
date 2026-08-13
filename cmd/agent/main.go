@@ -32,7 +32,8 @@ var version = "dev" // injetada por -ldflags "-X main.version=vX.Y.Z"
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "devsink" {
 		slog.Info("devsink listening", "addr", ":8081", "path", wire.Path)
-		if err := http.ListenAndServe(":8081", devsink.Handler(os.Stdout)); err != nil {
+		srv := &http.Server{Addr: ":8081", Handler: devsink.Handler(os.Stdout), ReadHeaderTimeout: 5 * time.Second}
+		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("devsink", "err", err)
 			os.Exit(1)
 		}
@@ -87,11 +88,40 @@ func run() error {
 		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		_ = http.ListenAndServe(":8080", mux)
+		srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+		if err := srv.ListenAndServe(); err != nil {
+			slog.Error("healthz listener failed", "err", err)
+		}
 	}()
 
 	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows)
 	window := aggregate.NewWindow(time.Now().UTC())
+
+	// buildSnapshot monta o envelope da janela corrente e a rola para a próxima.
+	buildSnapshot := func(end time.Time) wire.Snapshot {
+		usage := window.Close(end)
+		nodes, _ := nodeLister.List(labels.Everything())
+		pvcs, _ := pvcLister.List(labels.Everything())
+		pvs, _ := pvLister.List(labels.Everything())
+		pvByName := make(map[string]*corev1.PersistentVolume, len(pvs))
+		for _, pv := range pvs {
+			pvByName[pv.Name] = pv
+		}
+		svcs, _ := svcLister.List(labels.Everything())
+		snap := wire.Snapshot{
+			SchemaVersion: wire.SchemaVersion,
+			AgentVersion:  version,
+			ClusterUID:    clusterUID,
+			WindowStart:   window.Start(),
+			WindowEnd:     end,
+			Nodes:         collect.NodeInventory(nodes),
+			Usage:         usage,
+			PVCs:          collect.PVCInventory(pvcs, pvByName),
+			LoadBalancers: collect.LBInventory(svcs),
+		}
+		window = aggregate.NewWindowFrom(window, end)
+		return snap
+	}
 
 	scrape := time.NewTicker(cfg.ScrapeInterval)
 	defer scrape.Stop()
@@ -101,6 +131,14 @@ func run() error {
 	for {
 		select {
 		case <-ctx.Done():
+			// Shutdown gracioso: entrega a janela corrente antes de sair — sem isso,
+			// todo rolling update descartaria até um ShipInterval de uso observado.
+			shipper.Enqueue(buildSnapshot(time.Now().UTC()))
+			flushCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := shipper.Flush(flushCtx); err != nil {
+				slog.Warn("final flush failed", "pending", shipper.Pending(), "err", err)
+			}
 			return nil
 
 		case <-scrape.C:
@@ -127,28 +165,7 @@ func run() error {
 			}
 
 		case now := <-shipT.C:
-			end := now.UTC()
-			usage := window.Close(end)
-			nodes, _ := nodeLister.List(labels.Everything())
-			pvcs, _ := pvcLister.List(labels.Everything())
-			pvs, _ := pvLister.List(labels.Everything())
-			pvByName := make(map[string]*corev1.PersistentVolume, len(pvs))
-			for _, pv := range pvs {
-				pvByName[pv.Name] = pv
-			}
-			svcs, _ := svcLister.List(labels.Everything())
-			shipper.Enqueue(wire.Snapshot{
-				SchemaVersion: wire.SchemaVersion,
-				AgentVersion:  version,
-				ClusterUID:    clusterUID,
-				WindowStart:   window.Start(),
-				WindowEnd:     end,
-				Nodes:         collect.NodeInventory(nodes),
-				Usage:         usage,
-				PVCs:          collect.PVCInventory(pvcs, pvByName),
-				LoadBalancers: collect.LBInventory(svcs),
-			})
-			window = aggregate.NewWindowFrom(window, end)
+			shipper.Enqueue(buildSnapshot(now.UTC()))
 			if err := shipper.Flush(ctx); err != nil {
 				slog.Warn("ship failed, windows kept in buffer",
 					"pending", shipper.Pending(), "err", err)
