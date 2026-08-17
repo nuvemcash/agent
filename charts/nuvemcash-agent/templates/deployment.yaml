@@ -43,12 +43,17 @@ spec:
               value: {{ .Values.shipInterval | quote }}
           ports:
             - {name: health, containerPort: 8080}
+          # /healthz responde assim que o processo sobe; /readyz só depois que os caches
+          # do informer sincronizam. O startupProbe segura liveness e readiness até lá.
+          startupProbe:
+            httpGet: {path: /readyz, port: health}
+            {{- toYaml .Values.probes.startup | nindent 12 }}
           livenessProbe:
             httpGet: {path: /healthz, port: health}
-            initialDelaySeconds: 5
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
           readinessProbe:
-            httpGet: {path: /healthz, port: health}
-            initialDelaySeconds: 5
+            httpGet: {path: /readyz, port: health}
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

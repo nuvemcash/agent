@@ -4,10 +4,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -53,10 +55,22 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	// As probes sobem ANTES de qualquer trabalho de partida. Sincronizar os informers
+	// leva dezenas de segundos em cluster grande, e enquanto a porta não estiver no ar o
+	// kubelet mata o pod por liveness sem nunca deixá-lo terminar de subir — foi o que
+	// pôs o agente em CrashLoopBackOff num cluster de 19 nós / 512 pods / 2131 RS.
+	var ready atomic.Bool
+	go serveProbes(&ready)
+
 	rc, err := rest.InClusterConfig()
 	if err != nil {
 		return err
 	}
+	// O default do client-go (5 QPS / 10 burst) é pequeno demais aqui: cada ciclo dispara
+	// um nodes/proxy por nó, em rajada, além dos watches dos informers. Com o default
+	// já se observou throttling de 8s numa única chamada de scrape.
+	rc.QPS, rc.Burst = 50, 100
 	client, err := kubernetes.NewForConfig(rc)
 	if err != nil {
 		return err
@@ -69,7 +83,8 @@ func run() error {
 	}
 	clusterUID := string(ks.UID)
 
-	factory := informers.NewSharedInformerFactory(client, 10*time.Minute)
+	factory := informers.NewSharedInformerFactoryWithOptions(client, 10*time.Minute,
+		informers.WithTransform(trimReplicaSetTemplate))
 	podLister := factory.Core().V1().Pods().Lister()
 	nodeLister := factory.Core().V1().Nodes().Lister()
 	pvcLister := factory.Core().V1().PersistentVolumeClaims().Lister()
@@ -77,22 +92,17 @@ func run() error {
 	svcLister := factory.Core().V1().Services().Lister()
 	rsLister := factory.Apps().V1().ReplicaSets().Lister()
 	factory.Start(ctx.Done())
-	factory.WaitForCacheSync(ctx.Done())
 	defer factory.Shutdown()
+	// Cache não sincronizado é erro, não um caso a seguir em frente: os listers
+	// devolveriam listas vazias e o snapshot sairia com inventário zerado.
+	for typ, synced := range factory.WaitForCacheSync(ctx.Done()) {
+		if !synced {
+			return fmt.Errorf("cache do informer %v não sincronizou", typ)
+		}
+	}
+	ready.Store(true)
 	slog.Info("agent started", "version", version, "clusterUid", clusterUID,
 		"scrape", cfg.ScrapeInterval, "ship", cfg.ShipInterval)
-
-	// Probe de vida (chart aponta liveness/readiness para cá).
-	go func() {
-		mux := http.NewServeMux()
-		mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		})
-		srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
-		if err := srv.ListenAndServe(); err != nil {
-			slog.Error("healthz listener failed", "err", err)
-		}
-	}()
 
 	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows)
 	window := aggregate.NewWindow(time.Now().UTC())
@@ -181,4 +191,43 @@ func run() error {
 			}
 		}
 	}
+}
+
+// serveProbes expõe /healthz (o processo está vivo) e /readyz (os caches sincronizaram).
+// São endpoints distintos de propósito: durante a partida o agente está vivo mas ainda não
+// pronto, e responder 200 no liveness desde o primeiro instante é o que impede o kubelet de
+// reiniciá-lo em loop antes de ele chegar ao fim da sincronização.
+func serveProbes(ready *atomic.Bool) {
+	srv := &http.Server{Addr: ":8080", Handler: probeMux(ready), ReadHeaderTimeout: 5 * time.Second}
+	if err := srv.ListenAndServe(); err != nil {
+		slog.Error("probe listener failed", "err", err)
+	}
+}
+
+func probeMux(ready *atomic.Bool) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "sincronizando caches", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+	return mux
+}
+
+// trimReplicaSetTemplate descarta o PodTemplateSpec dos ReplicaSets antes de eles entrarem
+// no cache do informer. Do RS só interessam as ownerReferences (Pod→RS→Deployment), e o
+// template responde por quase todo o peso do objeto: num cluster com 2131 RS a LIST inicial
+// passa de 15 MB. Os demais tipos passam intactos — a factory aplica o transform a todos.
+func trimReplicaSetTemplate(obj any) (any, error) {
+	rs, ok := obj.(*appsv1.ReplicaSet)
+	if !ok {
+		return obj, nil
+	}
+	rs.Spec.Template = corev1.PodTemplateSpec{}
+	return rs, nil
 }

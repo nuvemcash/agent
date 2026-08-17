@@ -14,6 +14,25 @@ connection:
 scrapeInterval: "60s"
 shipInterval: "5m"
 
+# Probes. O startupProbe cobre a partida — sincronizar os caches do informer leva de
+# segundos a alguns minutos conforme o tamanho do cluster — e só depois que ele passa é
+# que liveness e readiness começam a valer. Os timeouts são folgados de propósito: num nó
+# sob pressão o próprio kubelet demora a executar a probe, e o default de 1s derruba um
+# agente saudável.
+probes:
+  startup:
+    periodSeconds: 5
+    failureThreshold: 60      # até 5min para sincronizar
+    timeoutSeconds: 3
+  liveness:
+    periodSeconds: 30
+    failureThreshold: 4
+    timeoutSeconds: 5
+  readiness:
+    periodSeconds: 30
+    failureThreshold: 3
+    timeoutSeconds: 5
+
 resources:
   requests:
     cpu: 20m
