@@ -1,3 +1,11 @@
+{{- /*
+  `helm upgrade --reuse-values` reaproveita os values computados do release ANTIGO e não
+  traz os defaults do chart novo — quem vier de um release sem o bloco `probes` cairia num
+  "nil pointer evaluating interface {}.startup". O required abaixo troca esse erro por uma
+  instrução do que fazer.
+*/}}
+{{- $probes := .Values.probes | default dict }}
+{{- $probeHint := "bloco `probes` ausente nos values: em upgrade de um release anterior a 0.2.2, troque --reuse-values por --reset-then-reuse-values" }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,13 +55,13 @@ spec:
           # do informer sincronizam. O startupProbe segura liveness e readiness até lá.
           startupProbe:
             httpGet: {path: /readyz, port: health}
-            {{- toYaml .Values.probes.startup | nindent 12 }}
+            {{- toYaml (required $probeHint $probes.startup) | nindent 12 }}
           livenessProbe:
             httpGet: {path: /healthz, port: health}
-            {{- toYaml .Values.probes.liveness | nindent 12 }}
+            {{- toYaml (required $probeHint $probes.liveness) | nindent 12 }}
           readinessProbe:
             httpGet: {path: /readyz, port: health}
-            {{- toYaml .Values.probes.readiness | nindent 12 }}
+            {{- toYaml (required $probeHint $probes.readiness) | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
