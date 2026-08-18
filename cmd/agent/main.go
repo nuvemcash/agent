@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -84,7 +85,7 @@ func run() error {
 	clusterUID := string(ks.UID)
 
 	factory := informers.NewSharedInformerFactoryWithOptions(client, 10*time.Minute,
-		informers.WithTransform(trimReplicaSetTemplate))
+		informers.WithTransform(trimCached))
 	podLister := factory.Core().V1().Pods().Lister()
 	nodeLister := factory.Core().V1().Nodes().Lister()
 	pvcLister := factory.Core().V1().PersistentVolumeClaims().Lister()
@@ -104,7 +105,7 @@ func run() error {
 	slog.Info("agent started", "version", version, "clusterUid", clusterUID,
 		"scrape", cfg.ScrapeInterval, "ship", cfg.ShipInterval)
 
-	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows)
+	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows, cfg.BufferBytes)
 	window := aggregate.NewWindow(time.Now().UTC())
 
 	// buildSnapshot monta o envelope da janela corrente e a rola para a próxima.
@@ -164,17 +165,16 @@ func run() error {
 				rsByKey[rs.Namespace+"/"+rs.Name] = rs
 			}
 			nodes, _ := nodeLister.List(labels.Everything())
-			for _, n := range nodes {
-				samples, err := collect.ScrapeNode(ctx, client, n.Name)
-				if err != nil {
-					slog.Warn("node scrape failed", "node", n.Name, "err", err)
-					continue
-				}
+			for _, r := range scrapeNodes(ctx, client, nodes) {
 				// Cobertura do nó = intervalo entre scrapes bem-sucedidos DELE, contado
 				// uma vez aqui. Contar dentro do laço de pods multiplicaria a cobertura
 				// pela quantidade de pods do nó.
-				window.ObserveNode(n.Name, time.Now().UTC())
-				for _, s := range samples {
+				//
+				// As amostras são aplicadas SERIALMENTE, aqui, mesmo tendo sido coletadas
+				// em paralelo: Window não é thread-safe, e uma corrida em sampled_s
+				// corromperia o rateio (o denominador do custo por nó).
+				window.ObserveNode(r.node, r.at)
+				for _, s := range r.samples {
 					pod, err := podLister.Pods(s.Namespace).Get(s.PodName)
 					if err != nil {
 						continue // pod sumiu entre o scrape e o lookup
@@ -219,15 +219,87 @@ func probeMux(ready *atomic.Bool) *http.ServeMux {
 	return mux
 }
 
-// trimReplicaSetTemplate descarta o PodTemplateSpec dos ReplicaSets antes de eles entrarem
-// no cache do informer. Do RS só interessam as ownerReferences (Pod→RS→Deployment), e o
-// template responde por quase todo o peso do objeto: num cluster com 2131 RS a LIST inicial
-// passa de 15 MB. Os demais tipos passam intactos — a factory aplica o transform a todos.
-func trimReplicaSetTemplate(obj any) (any, error) {
-	rs, ok := obj.(*appsv1.ReplicaSet)
-	if !ok {
-		return obj, nil
+// trimCached poda os objetos ANTES de eles entrarem no cache do informer. O cache é o maior
+// consumidor de memória do agente num cluster grande, e tudo o que ele guarda além do que a
+// agregação lê é peso morto.
+//
+// ATENÇÃO ao mexer aqui: podar demais quebra a resolução Pod→RS→Deployment em SILÊNCIO — o
+// workload passa a ser atribuído errado, sem erro nenhum. O hack/e2e-kind.sh cobre essa
+// resolução de ponta a ponta e é a única rede contra isso.
+func trimCached(obj any) (any, error) {
+	// managedFields é metadado de server-side apply que ninguém aqui lê e costuma ser dos
+	// maiores campos de qualquer objeto. Vale para TODOS os tipos.
+	if m, ok := obj.(metav1.Object); ok {
+		m.SetManagedFields(nil)
 	}
-	rs.Spec.Template = corev1.PodTemplateSpec{}
-	return rs, nil
+	switch o := obj.(type) {
+	case *appsv1.ReplicaSet:
+		// Do RS só interessam as ownerReferences (Pod→RS→Deployment), e o template responde
+		// por quase todo o peso: num cluster com 2131 RS a LIST inicial passa de 15 MB.
+		o.Spec.Template = corev1.PodTemplateSpec{}
+		o.Annotations = nil
+		return o, nil
+	case *corev1.Pod:
+		// O ÚNICO consumidor de *corev1.Pod é aggregate.ResolvePodMeta, que lê: Namespace,
+		// Name, Labels, OwnerReferences, Spec.NodeName e os Resources.Requests dos
+		// containers. Tudo o mais é descartável — e num cluster com 3.000–8.000 pods de
+		// 15–30 KB cada, "tudo o mais" é a maior parte da memória do agente.
+		requests := make([]corev1.Container, 0, len(o.Spec.Containers))
+		for _, c := range o.Spec.Containers {
+			requests = append(requests, corev1.Container{
+				Resources: corev1.ResourceRequirements{Requests: c.Resources.Requests},
+			})
+		}
+		o.Spec = corev1.PodSpec{NodeName: o.Spec.NodeName, Containers: requests}
+		o.Status = corev1.PodStatus{}
+		o.Annotations = nil
+		return o, nil
+	}
+	return obj, nil
+}
+
+// scrapeConcurrency limita os scrapes simultâneos de kubelet. O laço serial anterior
+// gastava até 30s por nó no pior caso: a 500 ms/nó, 132 nós levavam ~66s e passavam do
+// ScrapeInterval de 60s, fazendo o ticker DESCARTAR ticks — e cobertura perdida empurra
+// custo para "não monitorado", ou seja, mexe na conta do cliente. O limite fica dentro do
+// QPS/Burst já elevado do client (50/100), para o paralelismo não virar throttling.
+const scrapeConcurrency = 12
+
+// nodeSample é o resultado do scrape de UM nó, com o instante em que ele foi observado.
+type nodeSample struct {
+	node    string
+	at      time.Time
+	samples []collect.PodSample
+}
+
+// scrapeNodes varre os nós em paralelo e devolve só os que responderam. O instante de
+// observação é capturado DENTRO da goroutine, no fim do scrape daquele nó: usar um relógio
+// único depois do Wait daria a todos os nós a hora do mais lento, deslocando a cobertura.
+//
+// Erro de um nó não aborta os demais — um kubelet fora do ar não pode zerar o ciclo.
+func scrapeNodes(ctx context.Context, client kubernetes.Interface, nodes []*corev1.Node) []nodeSample {
+	var (
+		mu   sync.Mutex
+		out  = make([]nodeSample, 0, len(nodes))
+		wg   sync.WaitGroup
+		slot = make(chan struct{}, scrapeConcurrency)
+	)
+	for _, n := range nodes {
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			slot <- struct{}{}
+			defer func() { <-slot }()
+			samples, err := collect.ScrapeNode(ctx, client, name)
+			if err != nil {
+				slog.Warn("node scrape failed", "node", name, "err", err)
+				return
+			}
+			mu.Lock()
+			out = append(out, nodeSample{node: name, at: time.Now().UTC(), samples: samples})
+			mu.Unlock()
+		}(n.Name)
+	}
+	wg.Wait()
+	return out
 }
