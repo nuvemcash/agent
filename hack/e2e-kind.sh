@@ -13,6 +13,13 @@ kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER"
 kind load docker-image "$IMG" --name "$CLUSTER"
 KCTX="kind-$CLUSTER"
 
+# Registra o contexto do kind explicitamente, num KUBECONFIG PRÓPRIO. Não é higiene: numa
+# máquina de trabalho o kubeconfig ambiente costuma apontar para um cluster de PRODUÇÃO, e
+# um e2e que dependa do contexto default é um acidente esperando acontecer. Todos os
+# kubectl/helm abaixo passam --context/--kube-context, mas isolar o arquivo fecha a porta.
+export KUBECONFIG="${TMPDIR:-/tmp}/kubeconfig-$CLUSTER"
+kind export kubeconfig --name "$CLUSTER" --kubeconfig "$KUBECONFIG"
+
 # devsink no cluster (mesma imagem, subcomando).
 kubectl --context "$KCTX" delete deploy devsink --ignore-not-found
 kubectl --context "$KCTX" create deployment devsink --image="$IMG" -- /agent devsink
@@ -30,12 +37,23 @@ helm --kube-context "$KCTX" upgrade --install nuvemcash-agent charts/nuvemcash-a
   --set scrapeInterval=10s --set shipInterval=30s
 kubectl --context "$KCTX" -n nuvemcash-system rollout status deploy/nuvemcash-agent --timeout=120s
 
-# aguarda até 3 janelas pelo snapshot com usage.
+# aguarda até 3 janelas pelo snapshot com usage E com a resolução de workload.
+#
+# A asserção de workload NÃO é decoração: o transform do informer poda os Pods antes de eles
+# entrarem no cache, e podar demais quebra a resolução Pod→RS→Deployment em SILÊNCIO — o uso
+# passaria a ser atribuído ao Pod cru em vez do Deployment, sem erro nenhum, mudando a conta
+# do cliente. O devsink já é um Deployment, então ele mesmo é a cobaia.
 echo "aguardando snapshot no devsink..."
 for i in $(seq 1 30); do
   LOGS=$(kubectl --context "$KCTX" logs deploy/devsink 2>/dev/null || true)
   if echo "$LOGS" | grep -q "snapshot cluster=" && echo "$LOGS" | grep -qE "usage=[1-9]"; then
-    echo "== e2e OK =="
+    if ! echo "$LOGS" | grep -qE "default/devsink \(Deployment\)"; then
+      echo "e2e FALHOU: snapshot chegou, mas o workload não foi resolvido como Deployment" >&2
+      echo "  (poda do informer removeu ownerReferences/labels? ver trimCached em cmd/agent/main.go)" >&2
+      echo "$LOGS" | tail -12 >&2
+      exit 1
+    fi
+    echo "== e2e OK (snapshot + resolução Pod→RS→Deployment) =="
     echo "$LOGS" | tail -12
     exit 0
   fi
