@@ -23,6 +23,33 @@ type Snapshot struct {
 	Usage         []WorkloadUsage `json:"usage"`
 	PVCs          []PVC           `json:"pvcs,omitempty"`
 	LoadBalancers []LoadBalancer  `json:"loadBalancers,omitempty"`
+
+	// Agent é a saúde do PRÓPRIO agente. Viaja no contrato de fio de propósito: o
+	// /metrics do agente serve ao cliente, não a nós — é o cluster dele, e nada nosso
+	// raspa aquele endpoint. Sem este bloco, uma janela descartada por buffer cheio some
+	// com um log no cluster do cliente e nunca chega ao nosso lado.
+	//
+	// Ponteiro e omitempty: agente antigo não manda, e ausência tem de ser distinguível
+	// de zero — "nenhuma janela descartada" e "não sei se descartou" não são a mesma coisa.
+	Agent *AgentHealth `json:"agent,omitempty"`
+}
+
+// AgentHealth é a autotelemetria do agente na janela. ADITIVO no SchemaVersion 1: o ingest
+// do nuvem.cash ignora campo desconhecido, então um backend antigo simplesmente não o lê.
+type AgentHealth struct {
+	// DroppedWindows é o acumulado de janelas perdidas desde a partida do processo
+	// (buffer cheio ou falha de serialização). Acumulado, não por janela: reinício do pod
+	// zera, e é justamente o reinício que se quer ver no gráfico.
+	DroppedWindows int `json:"droppedWindows"`
+	// BufferedWindows e BufferedBytes são a ocupação da fila NO MOMENTO em que a janela foi
+	// montada — ou seja, ANTES de ela própria entrar. Fila crescendo é o sinal precoce de
+	// ingest inacessível ou rejeitando.
+	BufferedWindows int `json:"bufferedWindows"`
+	BufferedBytes   int `json:"bufferedBytes"`
+	// ScrapeRoundMillis é a duração do último ciclo de scrape de nós. Encostando no
+	// ScrapeInterval, o ticker começa a descartar ticks e a cobertura cai — que empurra
+	// custo para "não monitorado" e mexe na conta do cliente.
+	ScrapeRoundMillis int64 `json:"scrapeRoundMillis"`
 }
 
 // Node é o inventário de um nó no fim da janela.

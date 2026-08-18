@@ -107,6 +107,9 @@ func run() error {
 
 	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows, cfg.BufferBytes)
 	window := aggregate.NewWindow(time.Now().UTC())
+	// Duração do último ciclo de scrape, para viajar na autotelemetria. Só o loop principal
+	// escreve e lê, na mesma goroutine.
+	var lastScrape time.Duration
 
 	// buildSnapshot monta o envelope da janela corrente e a rola para a próxima.
 	buildSnapshot := func(end time.Time) wire.Snapshot {
@@ -134,6 +137,14 @@ func run() error {
 			Usage:         usage,
 			PVCs:          collect.PVCInventory(pvcs, pvByName),
 			LoadBalancers: collect.LBInventory(svcs),
+			// Ocupação lida ANTES de esta janela entrar na fila — é a fila que ela
+			// encontrou, que é o que interessa para ver a fila crescer.
+			Agent: &wire.AgentHealth{
+				DroppedWindows:    shipper.Dropped(),
+				BufferedWindows:   shipper.Pending(),
+				BufferedBytes:     shipper.PendingBytes(),
+				ScrapeRoundMillis: lastScrape.Milliseconds(),
+			},
 		}
 		window = aggregate.NewWindowFrom(window, end)
 		return snap
@@ -165,6 +176,7 @@ func run() error {
 				rsByKey[rs.Namespace+"/"+rs.Name] = rs
 			}
 			nodes, _ := nodeLister.List(labels.Everything())
+			roundStart := time.Now()
 			for _, r := range scrapeNodes(ctx, client, nodes) {
 				// Cobertura do nó = intervalo entre scrapes bem-sucedidos DELE, contado
 				// uma vez aqui. Contar dentro do laço de pods multiplicaria a cobertura
@@ -182,6 +194,7 @@ func run() error {
 					window.Observe(s, aggregate.ResolvePodMeta(pod, rsByKey))
 				}
 			}
+			lastScrape = time.Since(roundStart)
 
 		case now := <-shipT.C:
 			shipper.Enqueue(buildSnapshot(now.UTC()))
