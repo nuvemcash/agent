@@ -67,4 +67,36 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 			}
 		}
 	})
+
+	// A autotelemetria é ADITIVA no SchemaVersion 1: agente antigo não manda o bloco, e o
+	// backend precisa distinguir "não mandou" de "mandou zero" — daí ponteiro + omitempty.
+	t.Run("bloco agent é opcional e distingue ausência de zero", func(t *testing.T) {
+		sem := wire.Snapshot{SchemaVersion: wire.SchemaVersion, AgentVersion: "0.1.0", ClusterUID: "uid-1"}
+		mb, err := json.Marshal(sem)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(mb), `"agent"`) {
+			t.Fatalf("bloco agent não podia aparecer sem telemetria:\n%s", mb)
+		}
+
+		com := sem
+		com.Agent = &wire.AgentHealth{DroppedWindows: 0, BufferedWindows: 3, BufferedBytes: 4096, ScrapeRoundMillis: 12500}
+		cb, err := json.Marshal(com)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		// droppedWindows=0 tem de APARECER no JSON: "nenhuma janela descartada" é
+		// informação, e omiti-lo faria zero virar indistinguível de silêncio.
+		for _, want := range []string{`"droppedWindows":0`, `"bufferedWindows":3`,
+			`"bufferedBytes":4096`, `"scrapeRoundMillis":12500`} {
+			if !strings.Contains(string(cb), want) {
+				t.Fatalf("JSON sem %s:\n%s", want, cb)
+			}
+		}
+		var back wire.Snapshot
+		if err := json.Unmarshal(cb, &back); err != nil || back.Agent == nil || back.Agent.BufferedBytes != 4096 {
+			t.Fatalf("roundtrip do bloco agent falhou: %v %+v", err, back.Agent)
+		}
+	})
 }
