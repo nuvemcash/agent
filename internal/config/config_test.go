@@ -31,3 +31,21 @@ func TestLoad_Overrides(t *testing.T) {
 		t.Fatalf("override falhou: %+v %v", c, err)
 	}
 }
+
+func TestMetricsDefaultEOptOut(t *testing.T) {
+	t.Setenv("NUVEMCASH_AGENT_TOKEN", "tok")
+	t.Setenv("NUVEMCASH_AGENT_METRICS_ENABLED", "")
+	cfg, err := Load()
+	if err != nil || !cfg.MetricsEnabled {
+		t.Fatalf("métricas devem vir habilitadas: %+v, %v", cfg, err)
+	}
+	t.Setenv("NUVEMCASH_AGENT_METRICS_ENABLED", "false")
+	cfg, err = Load()
+	if err != nil || cfg.MetricsEnabled {
+		t.Fatalf("opt-out deve ser respeitado: %+v, %v", cfg, err)
+	}
+	t.Setenv("NUVEMCASH_AGENT_METRICS_ENABLED", "talvez")
+	if _, err := Load(); err == nil {
+		t.Fatal("booleano inválido deve ser recusado")
+	}
+}

@@ -1,0 +1,26 @@
+{{- if and .Values.monitoring.metrics.enabled .Values.monitoring.podMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ .Release.Name }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml (mergeOverwrite (deepCopy .Values.monitoring.podMonitor.labels) (dict "app.kubernetes.io/name" "nuvemcash-agent" "app.kubernetes.io/instance" .Release.Name)) | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames: [{{ .Release.Namespace | quote }}]
+  selector:
+    matchLabels:
+      {{- toYaml (mergeOverwrite (deepCopy .Values.monitoring.podMonitor.selector) (dict "app.kubernetes.io/name" "nuvemcash-agent" "app.kubernetes.io/instance" .Release.Name)) | nindent 6 }}
+  podMetricsEndpoints:
+    - port: health
+      path: /metrics
+      interval: {{ .Values.monitoring.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.podMonitor.scrapeTimeout }}
+      relabelings:
+        {{- range $name, $value := (include "nuvemcash-agent.monitoringIdentity" . | fromYaml) }}
+        - action: replace
+          targetLabel: {{ $name }}
+          replacement: {{ $value | quote }}
+        {{- end }}
+{{- end }}

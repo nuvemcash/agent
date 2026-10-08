@@ -40,5 +40,32 @@ resources:
   limits:
     memory: 256Mi
 
+podLabels: {}
 nodeSelector: {}
 tolerations: []
+
+# Integração com o monitoramento local; nenhuma stack é instalada pelo chart.
+monitoring:
+  # Vazio preserva o cluster definido pelo coletor; avaliação sem esse label é local.
+  # Antes de federar, configure uma identidade única aqui ou no coletor.
+  cluster: ""
+  environment: local
+  metrics:
+    enabled: true
+  podMonitor:
+    enabled: true
+    labels: {}
+    # MatchLabels adicionais (presentes em podLabels), combinados à identidade fixa da release.
+    selector: {}
+    interval: 30s
+    scrapeTimeout: 10s
+  alerts:
+    enabled: true
+    # Labels do recurso para a seleção pelo avaliador.
+    labels: {}
+    # Labels dos alertas; não substituem a identidade nem a condição/severidade.
+    additionalLabels: {}
+    notificationMode: active
+    failureSeconds: 600
+    # Perda é ocorrência: o aviso expira, sem afirmar restauração do dado descartado.
+    lossWindowSeconds: 600

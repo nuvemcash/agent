@@ -1,11 +1,24 @@
 package main
 
 import (
+	"compress/gzip"
+	"encoding/json"
+	"github.com/nuvemcash/agent/internal/aggregate"
+	"github.com/nuvemcash/agent/internal/collect"
+	"github.com/nuvemcash/agent/internal/ship"
+	"github.com/nuvemcash/agent/wire"
+	"io"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -17,7 +30,7 @@ import (
 // antes de ele terminar de sincronizar os caches; o readiness é que espera a sincronização.
 func TestProbesSeparamVivoDePronto(t *testing.T) {
 	var ready atomic.Bool
-	mux := probeMux(&ready)
+	mux := probeMux(&ready, ship.New("http://unused", "tok", 10, 0), &collectionHealth{}, true)
 
 	get := func(path string) int {
 		rec := httptest.NewRecorder()
@@ -149,3 +162,327 @@ func TestTrimCachedOutrosTiposSoPerdemManagedFields(t *testing.T) {
 }
 
 func ptr[T any](v T) *T { return &v }
+
+// O scrape HTTP local deve mostrar retenção e recuperação do envio real.
+func TestMetricasDoEnvio(t *testing.T) {
+	var status atomic.Int32
+	status.Store(http.StatusServiceUnavailable)
+	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(int(status.Load()))
+	}))
+	defer ingest.Close()
+	s := ship.New(ingest.URL, "tok", 10, 0)
+	var ready atomic.Bool
+	mux := probeMux(&ready, s, &collectionHealth{}, true)
+	metric := func(name string) float64 {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("metrics status: %d", rec.Code)
+		}
+		return metricValue(t, rec.Body.String(), name)
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if metric("nuvemcash_agent_ship_failed") != 0 || metric("nuvemcash_agent_buffer_windows") != 0 || metric("nuvemcash_agent_ship_last_success_timestamp_seconds") != 0 {
+		t.Fatal("ociosidade não é envio impedido nem conclusão de envio")
+	}
+	s.Enqueue(wire.Snapshot{WindowStart: time.Now().Add(-5 * time.Minute), WindowEnd: time.Now()})
+	if err := s.Flush(t.Context()); err == nil {
+		t.Fatal("esperava 503")
+	}
+	if metric("nuvemcash_agent_ship_failed") != 1 || metric("nuvemcash_agent_buffer_windows") != 1 || metric("nuvemcash_agent_buffer_bytes") <= 0 || metric("nuvemcash_agent_buffer_oldest_age_seconds") <= 0 || metric("nuvemcash_agent_ship_failure_since_timestamp_seconds") <= 0 {
+		t.Fatal("a janela impedida deve permanecer observável")
+	}
+	status.Store(http.StatusAccepted)
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if metric("nuvemcash_agent_ship_failed") != 0 || metric("nuvemcash_agent_buffer_windows") != 0 || metric("nuvemcash_agent_buffer_bytes") != 0 || metric("nuvemcash_agent_buffer_oldest_age_seconds") != 0 || metric("nuvemcash_agent_ship_last_success_timestamp_seconds") <= 0 {
+		t.Fatal("drenagem aceita deve recuperar o envio")
+	}
+}
+
+func metricValue(t *testing.T, body, name string) float64 {
+	t.Helper()
+	for line := range strings.SplitSeq(body, "\n") {
+		if value, ok := strings.CutPrefix(line, name+" "); ok {
+			v, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return v
+		}
+	}
+	t.Fatalf("métrica %q ausente em:\n%s", name, body)
+	return 0
+}
+
+func TestMetricasColetaParcialNaoRecuperaComEnvio(t *testing.T) {
+	var fail atomic.Value
+	fail.Store("")
+	fixture, err := os.ReadFile("../../internal/collect/testdata/summary.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	kube := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if node := fail.Load().(string); node != "" && strings.Contains(r.URL.Path, "/nodes/"+node+"/") {
+			http.Error(w, "kubelet indisponível", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture)
+	}))
+	defer kube.Close()
+	client, err := kubernetes.NewForConfig(&rest.Config{Host: kube.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var received wire.Snapshot
+	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer func() {
+			if err := zr.Close(); err != nil {
+				t.Error(err)
+			}
+		}()
+		if err := json.NewDecoder(zr).Decode(&received); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ingest.Close()
+	s := ship.New(ingest.URL, "tok", 10, 0)
+	h := &collectionHealth{}
+	var ready atomic.Bool
+	ready.Store(true)
+	mux := probeMux(&ready, s, h, true)
+	metric := func(name string) float64 {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return metricValue(t, rec.Body.String(), name)
+	}
+	nodes := []*corev1.Node{{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}}, {ObjectMeta: metav1.ObjectMeta{Name: "node-2"}}}
+	scrapeNodes(t.Context(), client, nodes, h)
+	lastSuccess := metric("nuvemcash_agent_collection_last_success_timestamp_seconds")
+	if lastSuccess <= 0 || metric("nuvemcash_agent_collection_complete") != 1 {
+		t.Fatal("coleta completa não observada")
+	}
+	fail.Store("node-1")
+	partial := scrapeNodes(t.Context(), client, nodes, h)
+	if len(partial) != 1 {
+		t.Fatalf("coleta parcial: %d nós", len(partial))
+	}
+	window := aggregate.NewWindow(time.Now().Add(-5 * time.Minute))
+	for _, result := range partial {
+		window.ObserveNode(result.node, result.at)
+		for _, sample := range result.samples {
+			meta := aggregate.PodMeta{Node: result.node, Namespace: sample.Namespace, WorkloadKind: "Pod", WorkloadName: sample.PodName}
+			window.Observe(sample, meta)
+			sample.Time = sample.Time.Add(time.Minute)
+			sample.CPUUsageCoreSeconds++
+			window.Observe(sample, meta)
+		}
+	}
+	s.Enqueue(wire.Snapshot{WindowStart: window.Start(), WindowEnd: time.Now(), Nodes: collect.NodeInventory(nodes), Usage: window.Close(time.Now())})
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(received.Nodes) != 2 || len(received.Usage) != 1 || received.Usage[0].Node != "node-2" {
+		t.Fatalf("envio deve conter o inventário e somente o uso coletado: %+v", received)
+	}
+	if metric("nuvemcash_agent_collection_failed") != 1 || metric("nuvemcash_agent_collection_complete") != 0 || metric("nuvemcash_agent_collection_nodes_collected") != 1 || metric("nuvemcash_agent_collection_nodes_expected") != 2 {
+		t.Fatal("envio aceito apagou a falha parcial")
+	}
+	if metric("nuvemcash_agent_collection_last_success_timestamp_seconds") != lastSuccess {
+		t.Fatal("parcial não é conclusão válida")
+	}
+	failedSince := metric("nuvemcash_agent_collection_failure_since_timestamp_seconds")
+	scrapeNodes(t.Context(), client, nodes, h)
+	if metric("nuvemcash_agent_collection_failure_since_timestamp_seconds") != failedSince {
+		t.Fatal("retry reiniciou a falha do nó")
+	}
+	fail.Store("node-2")
+	scrapeNodes(t.Context(), client, nodes, h)
+	if metric("nuvemcash_agent_collection_failure_since_timestamp_seconds") <= failedSince {
+		t.Fatal("recuperação do nó deve encerrar apenas a falha dele")
+	}
+	fail.Store("")
+	scrapeNodes(t.Context(), client, nodes, h)
+	if metric("nuvemcash_agent_collection_failed") != 0 || metric("nuvemcash_agent_collection_complete") != 1 || metric("nuvemcash_agent_collection_last_success_timestamp_seconds") <= lastSuccess {
+		t.Fatal("coleta completa não recuperou")
+	}
+}
+
+func TestMetricasPerdasDefinitivas(t *testing.T) {
+	cases := []struct {
+		name, reason                 string
+		maxWindows, maxBytes, status int
+		encode                       bool
+	}{
+		{name: "limite de janelas", reason: "buffer_windows", maxWindows: 1},
+		{name: "limite de bytes", reason: "buffer_bytes", maxWindows: 10, maxBytes: 1},
+		{name: "encode inválido", reason: "encode", maxWindows: 10, encode: true},
+		{name: "rejeição HTTP", reason: "http_rejected", maxWindows: 10, status: http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(tc.status) }))
+			defer ingest.Close()
+			s := ship.New(ingest.URL, "tok", tc.maxWindows, tc.maxBytes)
+			var ready atomic.Bool
+			mux := probeMux(&ready, s, &collectionHealth{}, true)
+			metrics := func() string {
+				rec := httptest.NewRecorder()
+				mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+				return rec.Body.String()
+			}
+			counter := `nuvemcash_agent_dropped_windows_total{reason="` + tc.reason + `"}`
+			lastDrop := `nuvemcash_agent_last_drop_timestamp_seconds{reason="` + tc.reason + `"}`
+			if metricValue(t, metrics(), counter) != 0 || metricValue(t, metrics(), lastDrop) != 0 {
+				t.Fatal("processo novo não tem perdas históricas")
+			}
+			snap := wire.Snapshot{WindowStart: time.Now().Add(-5 * time.Minute), WindowEnd: time.Now()}
+			if tc.encode {
+				snap.WindowEnd = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+			}
+			s.Enqueue(snap)
+			if tc.status != 0 {
+				if err := s.Flush(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			} else if !tc.encode {
+				s.Enqueue(snap)
+			}
+			body := metrics()
+			if metricValue(t, body, counter) != 1 || metricValue(t, body, lastDrop) <= 0 {
+				t.Fatal("perda definitiva não observada")
+			}
+			if metricValue(t, body, "nuvemcash_agent_ship_failed") != 0 {
+				t.Fatal("descarte não é retenção recuperável")
+			}
+			if metricValue(t, body, "nuvemcash_agent_ship_last_success_timestamp_seconds") != 0 {
+				t.Fatal("descarte não é envio aceito")
+			}
+			if s.Dropped() != 1 {
+				t.Fatal("autotelemetria deve contar todas as perdas")
+			}
+		})
+	}
+}
+
+func TestMetricasEnvioRecuperaSomenteJanelaAfetada(t *testing.T) {
+	var calls atomic.Int32
+	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		switch calls.Add(1) {
+		case 1, 3:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer ingest.Close()
+	s := ship.New(ingest.URL, "tok", 10, 0)
+	var ready atomic.Bool
+	mux := probeMux(&ready, s, &collectionHealth{}, true)
+	metrics := func() string {
+		r := httptest.NewRecorder()
+		mux.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return r.Body.String()
+	}
+	s.Enqueue(wire.Snapshot{WindowStart: time.Now().Add(-10 * time.Minute), WindowEnd: time.Now().Add(-5 * time.Minute)})
+	s.Enqueue(wire.Snapshot{WindowStart: time.Now().Add(-5 * time.Minute), WindowEnd: time.Now()})
+	if err := s.Flush(t.Context()); err == nil {
+		t.Fatal("esperava primeira falha")
+	}
+	before := metricValue(t, metrics(), "nuvemcash_agent_ship_failure_since_timestamp_seconds")
+	if err := s.Flush(t.Context()); err == nil {
+		t.Fatal("a segunda janela deve falhar após aceite da primeira")
+	}
+	body := metrics()
+	if metricValue(t, body, "nuvemcash_agent_ship_failed") != 1 || metricValue(t, body, "nuvemcash_agent_buffer_windows") != 1 || metricValue(t, body, "nuvemcash_agent_ship_failure_since_timestamp_seconds") <= before {
+		t.Fatal("falhas de janelas distintas foram confundidas")
+	}
+	if err := s.Flush(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if metricValue(t, metrics(), "nuvemcash_agent_ship_failed") != 0 {
+		t.Fatal("drenagem final não recuperou")
+	}
+}
+
+func TestMetricasHTTPConcorrentesEFormatoPrometheus(t *testing.T) {
+	tool := os.Getenv("PROMTOOL")
+	if tool == "" {
+		tool = "promtool"
+	}
+	if _, err := exec.LookPath(tool); err != nil {
+		t.Skip("promtool necessário para validar a exposição HTTP")
+	}
+	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) }))
+	defer ingest.Close()
+	s := ship.New(ingest.URL, "tok", 2, 0)
+	var ready atomic.Bool
+	health := &collectionHealth{}
+	server := httptest.NewServer(probeMux(&ready, s, health, true))
+	defer server.Close()
+	errors := make(chan error, 1)
+	go func() {
+		for range 20 {
+			response, err := http.Get(server.URL + "/metrics")
+			if err != nil {
+				errors <- err
+				return
+			}
+			_, err = io.Copy(io.Discard, response.Body)
+			closeErr := response.Body.Close()
+			if err == nil {
+				err = closeErr
+			}
+			if err != nil {
+				errors <- err
+				return
+			}
+		}
+		errors <- nil
+	}()
+	for range 20 {
+		s.Enqueue(wire.Snapshot{WindowStart: time.Now().Add(-5 * time.Minute), WindowEnd: time.Now()})
+		if err := s.Flush(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := <-errors; err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.Get(server.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/plain; version=0.0.4; charset=utf-8" {
+		t.Fatal("contrato HTTP das métricas inválido")
+	}
+	cmd := exec.Command(tool, "check", "metrics")
+	cmd.Stdin = response.Body
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("promtool: %v\n%s", err, output)
+	}
+	optOut := httptest.NewRecorder()
+	probeMux(&ready, s, health, false).ServeHTTP(optOut, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if optOut.Code != http.StatusNotFound {
+		t.Fatal("endpoint ignorou opt-out")
+	}
+}
