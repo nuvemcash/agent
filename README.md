@@ -88,6 +88,7 @@ monitoring:
     notificationMode: active        # controlled para testar o roteamento local
     failureSeconds: 600
     lossWindowSeconds: 600
+    outdatedFor: 72h                 # aviso informativo de atualização
 ```
 
 `namespace`, `release`, `environment` e `component=agent` são fixados no scrape e
@@ -97,9 +98,10 @@ agrupam os resultados por cluster sem misturar suas falhas. Séries sem esse lab
 `cluster=local` apenas na avaliação local. **Antes de reunir séries de vários clusters,
 configure identidades únicas em `monitoring.cluster` ou no coletor**: séries federadas
 sem identidade já são indistinguíveis na origem. `additionalLabels` não substitui
-identidade, condição, severidade, produto nem modo de notificação. `cluster` e `reason`
-são reservados: os adicionais não alteram o cluster da série/configuração nem o motivo
-da perda; para fixar o cluster da instalação, use `monitoring.cluster`.
+identidade, condição, severidade, produto nem modo de notificação. `cluster`, `reason`,
+`status`, `installed_version` e `latest_version` são reservados: os adicionais não
+alteram dimensões da série/configuração. Para fixar o cluster da instalação, use
+`monitoring.cluster`.
 
 A instalação antiga com apenas o token continua válida mesmo em clusters com ambas as
 CRDs. O label de release acrescentado ao pod isola o PodMonitor; o selector imutável do
@@ -120,6 +122,23 @@ Zero nos timestamps significa que o marco ainda não ocorreu desde a partida.
 | `ship_failed`, `ship_failure_since_timestamp_seconds`, `ship_last_success_timestamp_seconds` | Falha de transporte da janela retida; início dessa falha; última janela aceita por HTTP. Fila vazia não inventa sucesso nem falha. Aceitar uma janela não recupera outra ainda impedida. |
 | `buffer_windows`, `buffer_bytes`, `buffer_oldest_age_seconds` | Quantidade de janelas agregadas e bytes comprimidos aguardando envio, incluindo o envio em andamento; idade desde o enfileiramento da mais antiga, não a idade dos dados no backend. |
 | `dropped_windows_total{reason}`, `last_drop_timestamp_seconds{reason}` | Contagem e instante da última perda definitiva, com motivos limitados a `buffer_windows`, `buffer_bytes`, `encode` e `http_rejected`. Logs preservam `windowStart` e o erro/código HTTP quando aplicável. |
+| `version_status{status,installed_version,latest_version}` | Uma série corrente com valor 1: `updated` (igual ou à frente), `outdated` (abaixo) ou `unknown` (comparação inválida/indisponível). Versões canônicas com `v`, sem build metadata; versão inválida é label vazio. |
+
+A referência opcional vem de `latestAgentVersion` na resposta do envio existente, sem
+polling do GitHub nem I/O adicional na API. Cada resposta HTTP aceita substitui a
+referência anterior: corpo vazio/sem campo, JSON inválido, erro de leitura ou referência
+inválida produzem `unknown`, inclusive após uma referência válida. Isso preserva o aceite
+e a drenagem da janela, sem reenvio. A leitura é limitada a 4 KiB e cada versão a 128
+bytes após acrescentar `v`; referências maiores são desconhecidas. Builds `dev` também
+não permitem comparar. A comparação segue `golang.org/x/mod/semver`, como na API;
+pré-release precede a release e build metadata não altera a precedência.
+
+`NuvemcashAgentOutdated` tem severidade `info`, destinatário local e espera contínua
+de `outdatedFor` (72h herdadas do aviso anterior, configuráveis; não é SLA). Só dispara
+com comparação válida desatualizada. Atualização válida ou `unknown` encerram a condição
+e reiniciam a espera; desconhecido não comprova atualização. A referência não tem prazo
+de frescor: a API pode devolver seu último catálogo conhecido, e falhas de transporte
+sem novo aceite não renovam a observação. O estado local se perde ao reiniciar o agente.
 
 Um retry 429/5xx/rede mantém a janela no buffer e o início da falha. A regra só avisa
 quando essa mesma falha alcança `failureSeconds` (dez minutos inicialmente), sem somar

@@ -223,7 +223,7 @@ func probeMux(ready *atomic.Bool, shipper *ship.Shipper, health *collectionHealt
 	if metricsEnabled {
 		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-			if err := shipper.WriteMetrics(w); err != nil {
+			if err := shipper.WriteMetrics(w, version); err != nil {
 				return
 			}
 			if err := health.writeMetrics(w); err != nil {

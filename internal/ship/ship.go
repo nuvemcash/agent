@@ -38,12 +38,13 @@ type Shipper struct {
 	maxBytes int
 	client   *http.Client
 
-	mu          sync.Mutex
-	queue       []queued
-	bytes       int
-	dropped     int
-	lastSuccess time.Time
-	losses      [4]loss
+	mu            sync.Mutex
+	queue         []queued
+	bytes         int
+	dropped       int
+	lastSuccess   time.Time
+	latestVersion string
+	losses        [4]loss
 }
 
 // New monta o shipper. bufferWindows limita a fila em JANELAS e bufferBytes em BYTES
@@ -178,6 +179,7 @@ func (s *Shipper) post(ctx context.Context, q queued) (bool, error) {
 	defer resp.Body.Close() //nolint:errcheck // corpo já lido/descartado; erro de close não é acionável
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		s.observeVersion(resp.Body)
 		return false, nil
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 		return true, fmt.Errorf("ingest %d", resp.StatusCode)

@@ -24,12 +24,13 @@ component: agent
 {{- define "nuvemcash-agent.alertLabels" -}}
 {{- $root := .root -}}
 {{- $identity := include "nuvemcash-agent.monitoringIdentity" $root | fromYaml -}}
-{{- $labels := mergeOverwrite (omit (deepCopy $root.Values.monitoring.alerts.additionalLabels) "cluster" "reason") $identity (dict "product" "nuvemcash" "notification_mode" $root.Values.monitoring.alerts.notificationMode "condition" .condition "severity" "warning") -}}
+{{- $labels := mergeOverwrite (omit (deepCopy $root.Values.monitoring.alerts.additionalLabels) "cluster" "reason" "status" "installed_version" "latest_version") $identity (dict "product" "nuvemcash" "notification_mode" $root.Values.monitoring.alerts.notificationMode "condition" .condition "severity" (.severity | default "warning")) -}}
 {{ toYaml $labels }}
 {{- end -}}
 
 {{- define "nuvemcash-agent.metric" -}}
 {{- $selector := include "nuvemcash-agent.metricSelector" .root -}}
+{{- if .status -}}{{- $selector = printf "%s,status=%q" $selector .status -}}{{- end -}}
 {{- if .root.Values.monitoring.cluster -}}
 {{ .name }}{ {{- $selector -}} }
 {{- else -}}

@@ -32,4 +32,15 @@ groups:
           description: 'Uma janela foi descartada recentemente por {{ "{{ $labels.reason }}" }}. O encerramento do aviso indica o fim da janela de observação, não restauração do dado.'
           evidence: 'Consulte /metrics (dropped_windows_total, last_drop_timestamp_seconds) e os logs com windowStart da release {{ "{{ $labels.release }}" }} no namespace {{ "{{ $labels.namespace }}" }}.'
           action: "Investigue buffer_windows/buffer_bytes, encode ou http_rejected. Corrija a causa indicada nos logs; o buffer em memória não permite reenviar uma janela já descartada."
+      - alert: NuvemcashAgentOutdated
+        expr: |
+          max by (cluster, installed_version, latest_version) ({{ include "nuvemcash-agent.metric" (dict "root" . "name" "nuvemcash_agent_version_status" "status" "outdated") }}) == 1
+        for: {{ .Values.monitoring.alerts.outdatedFor | quote }}
+        labels:
+          {{- include "nuvemcash-agent.alertLabels" (dict "root" . "condition" "version_outdated" "severity" "info") | nindent 10 }}
+        annotations:
+          summary: "Atualização do agente disponível no cluster local"
+          description: 'A versão {{ "{{ $labels.installed_version }}" }} está abaixo da referência conhecida {{ "{{ $labels.latest_version }}" }}. Este aviso informativo local não representa indisponibilidade.'
+          evidence: 'Consulte /metrics (version_status) da release {{ "{{ $labels.release }}" }} no namespace {{ "{{ $labels.namespace }}" }}. A referência vem da resposta do envio já existente, sem prazo de frescor.'
+          action: "Programe a atualização do agente pelo chart. Comparação válida atualizada ou referência desconhecida encerram o aviso; desconhecido não comprova atualização."
 {{- end -}}

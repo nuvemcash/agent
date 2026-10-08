@@ -28,11 +28,12 @@ func (s *Shipper) recordDrop(reason int) {
 }
 
 // WriteMetrics publica o estado da fila real; envio em vazio não produz sucesso.
-func (s *Shipper) WriteMetrics(w io.Writer) error {
+func (s *Shipper) WriteMetrics(w io.Writer, installedVersion string) error {
 	s.mu.Lock()
 	pending, bytes := len(s.queue), s.bytes
 	lastSuccess := timestamp(s.lastSuccess)
 	losses := s.losses
+	latestVersion := s.latestVersion
 	var oldest, failedSince float64
 	if pending > 0 {
 		oldest = timestamp(s.queue[0].enqueuedAt)
@@ -87,7 +88,7 @@ nuvemcash_agent_buffer_oldest_age_seconds %g
 			return err
 		}
 	}
-	return nil
+	return writeVersionMetrics(w, installedVersion, latestVersion)
 }
 
 func timestamp(t time.Time) float64 {

@@ -63,10 +63,12 @@ monitoring:
     enabled: true
     # Labels do recurso para a seleção pelo avaliador.
     labels: {}
-    # Labels dos alertas; não substituem identidade, condição/severidade nem reason.
-    # cluster e reason são reservados aos valores da configuração/expressão.
+    # Labels dos alertas; não substituem identidade, condição/severidade nem dimensões.
+    # cluster, reason, status, installed_version e latest_version são reservados.
     additionalLabels: {}
     notificationMode: active
     failureSeconds: 600
     # Perda é ocorrência: o aviso expira, sem afirmar restauração do dado descartado.
     lossWindowSeconds: 600
+    # Cadência informativa herdada; não representa SLA de atualização ou disponibilidade.
+    outdatedFor: 72h

@@ -3,6 +3,7 @@ module github.com/nuvemcash/agent
 go 1.26.0
 
 require (
+	golang.org/x/mod v0.31.0
 	k8s.io/api v0.36.3
 	k8s.io/apimachinery v0.36.3
 	k8s.io/client-go v0.36.3
