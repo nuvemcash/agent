@@ -24,7 +24,7 @@ component: agent
 {{- define "nuvemcash-agent.alertLabels" -}}
 {{- $root := .root -}}
 {{- $identity := include "nuvemcash-agent.monitoringIdentity" $root | fromYaml -}}
-{{- $labels := mergeOverwrite (deepCopy $root.Values.monitoring.alerts.additionalLabels) $identity (dict "product" "nuvemcash" "notification_mode" $root.Values.monitoring.alerts.notificationMode "condition" .condition "severity" "warning") -}}
+{{- $labels := mergeOverwrite (omit (deepCopy $root.Values.monitoring.alerts.additionalLabels) "cluster" "reason") $identity (dict "product" "nuvemcash" "notification_mode" $root.Values.monitoring.alerts.notificationMode "condition" .condition "severity" "warning") -}}
 {{ toYaml $labels }}
 {{- end -}}
 

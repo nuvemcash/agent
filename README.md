@@ -97,7 +97,9 @@ agrupam os resultados por cluster sem misturar suas falhas. Séries sem esse lab
 `cluster=local` apenas na avaliação local. **Antes de reunir séries de vários clusters,
 configure identidades únicas em `monitoring.cluster` ou no coletor**: séries federadas
 sem identidade já são indistinguíveis na origem. `additionalLabels` não substitui
-identidade, condição, severidade, produto nem modo de notificação.
+identidade, condição, severidade, produto nem modo de notificação. `cluster` e `reason`
+são reservados: os adicionais não alteram o cluster da série/configuração nem o motivo
+da perda; para fixar o cluster da instalação, use `monitoring.cluster`.
 
 A instalação antiga com apenas o token continua válida mesmo em clusters com ambas as
 CRDs. O label de release acrescentado ao pod isola o PodMonitor; o selector imutável do

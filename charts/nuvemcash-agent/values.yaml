@@ -63,7 +63,8 @@ monitoring:
     enabled: true
     # Labels do recurso para a seleção pelo avaliador.
     labels: {}
-    # Labels dos alertas; não substituem a identidade nem a condição/severidade.
+    # Labels dos alertas; não substituem identidade, condição/severidade nem reason.
+    # cluster e reason são reservados aos valores da configuração/expressão.
     additionalLabels: {}
     notificationMode: active
     failureSeconds: 600

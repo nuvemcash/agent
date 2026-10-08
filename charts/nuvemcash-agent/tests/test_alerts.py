@@ -206,6 +206,20 @@ check_rules(custom, [
      "input_series": [series("ship_failure_since_timestamp_seconds", "0 60+0x6")],
      "promql_expr_test": [assertion("2m", ship), assertion("3m", ship, [alert_sample(ship, "ship_failed", notification_mode="controlled", owner="ops")])]},
 ])
+# Labels dinâmicos não podem ser substituídos por adicionais da instalação.
+reserved_loss = {
+    "name": "motivos distintos sobrevivem a additionalLabels.reason",
+    "input_series": [series("last_drop_timestamp_seconds", "0 60+0x15", reason=reason) for reason in ["buffer_windows", "http_rejected"]],
+    "promql_expr_test": [assertion("1m", loss, [alert_sample(loss, "data_loss", reason=reason) for reason in ["buffer_windows", "http_rejected"]])],
+}
+reserved_overrides = ("monitoring.alerts.additionalLabels.cluster=fixed", "monitoring.alerts.additionalLabels.reason=fixed")
+check_rules(render((RULE,), overrides=("monitoring.cluster=",) + reserved_overrides), [
+    {"name": "clusters distintos sobrevivem a additionalLabels.cluster",
+     "input_series": [series("ship_failure_since_timestamp_seconds", "60+0x20", cluster=cluster) for cluster in ["cluster-a", "cluster-b"]],
+     "promql_expr_test": [assertion("11m", ship, [alert_sample(ship, "ship_failed", cluster=cluster) for cluster in ["cluster-a", "cluster-b"]])]},
+    reserved_loss,
+])
+check_rules(render((RULE,), overrides=reserved_overrides), [reserved_loss])
 # Aspas, barra e nova linha são valores de labels, nunca sintaxe PromQL interpolada.
 with tempfile.TemporaryDirectory() as folder:
     values = pathlib.Path(folder) / "escape.yaml"
