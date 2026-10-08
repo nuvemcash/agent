@@ -164,7 +164,7 @@ func TestTrimCachedOutrosTiposSoPerdemManagedFields(t *testing.T) {
 func ptr[T any](v T) *T { return &v }
 
 // O scrape HTTP local deve mostrar retenção e recuperação do envio real.
-func TestMetricasDoEnvio(t *testing.T) {
+func TestShippingMetrics(t *testing.T) {
 	var status atomic.Int32
 	status.Store(http.StatusServiceUnavailable)
 	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -220,7 +220,7 @@ func metricValue(t *testing.T, body, name string) float64 {
 	return 0
 }
 
-func TestMetricasColetaParcialNaoRecuperaComEnvio(t *testing.T) {
+func TestMetricsPartialCollectionNotRecoveredByShipping(t *testing.T) {
 	var fail atomic.Value
 	fail.Store("")
 	fixture, err := os.ReadFile("../../internal/collect/testdata/summary.json")
@@ -322,7 +322,7 @@ func TestMetricasColetaParcialNaoRecuperaComEnvio(t *testing.T) {
 	}
 }
 
-func TestMetricasPerdasDefinitivas(t *testing.T) {
+func TestMetricsPermanentLosses(t *testing.T) {
 	cases := []struct {
 		name, reason                 string
 		maxWindows, maxBytes, status int
@@ -379,7 +379,7 @@ func TestMetricasPerdasDefinitivas(t *testing.T) {
 	}
 }
 
-func TestMetricasEnvioRecuperaSomenteJanelaAfetada(t *testing.T) {
+func TestMetricsShippingRecoversOnlyAffectedWindow(t *testing.T) {
 	var calls atomic.Int32
 	ingest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		switch calls.Add(1) {
@@ -419,7 +419,7 @@ func TestMetricasEnvioRecuperaSomenteJanelaAfetada(t *testing.T) {
 	}
 }
 
-func TestMetricasHTTPConcorrentesEFormatoPrometheus(t *testing.T) {
+func TestMetricsConcurrentHTTPAndPrometheusFormat(t *testing.T) {
 	tool := os.Getenv("PROMTOOL")
 	if tool == "" {
 		tool = "promtool"

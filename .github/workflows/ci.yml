@@ -57,4 +57,4 @@ jobs:
         run: |
           helm lint charts/nuvemcash-agent --set connection.existingSecret=agent-token
           "$RUNNER_TEMP/agent-monitoring/venv/bin/python" charts/nuvemcash-agent/tests/test_alerts.py
-          PROMTOOL=promtool go test ./cmd/agent -run TestMetricasHTTPConcorrentesEFormatoPrometheus -count=1
+          PROMTOOL=promtool go test ./cmd/agent -run TestMetricsConcurrentHTTPAndPrometheusFormat -count=1

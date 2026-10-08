@@ -16,7 +16,7 @@ import (
 )
 
 // Fixtures literais do contrato API docs/contracts/k8s-ingest.md (T5 f6216828).
-func TestVersaoLocalAposAceiteHTTP(t *testing.T) {
+func TestLocalVersionAfterHTTPAcceptance(t *testing.T) {
 	previous := version
 	t.Cleanup(func() { version = previous })
 	for _, tc := range []struct {

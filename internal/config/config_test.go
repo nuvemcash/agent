@@ -32,7 +32,7 @@ func TestLoad_Overrides(t *testing.T) {
 	}
 }
 
-func TestMetricsDefaultEOptOut(t *testing.T) {
+func TestMetricsDefaultAndOptOut(t *testing.T) {
 	t.Setenv("NUVEMCASH_AGENT_TOKEN", "tok")
 	t.Setenv("NUVEMCASH_AGENT_METRICS_ENABLED", "")
 	cfg, err := Load()
