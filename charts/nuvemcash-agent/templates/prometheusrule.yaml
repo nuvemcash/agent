@@ -1,0 +1,11 @@
+{{- if and .Values.monitoring.metrics.enabled .Values.monitoring.alerts.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ .Release.Name }}-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml (mergeOverwrite (deepCopy .Values.monitoring.alerts.labels) (dict "app.kubernetes.io/name" "nuvemcash-agent" "app.kubernetes.io/instance" .Release.Name)) | nindent 4 }}
+spec:
+  {{- include "nuvemcash-agent.rules" . | nindent 2 }}
+{{- end }}

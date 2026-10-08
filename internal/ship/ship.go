@@ -25,6 +25,8 @@ import (
 // memória, e permite limitar por bytes, que é a grandeza que de fato causa OOM.
 type queued struct {
 	windowStart time.Time
+	enqueuedAt  time.Time
+	failedSince time.Time
 	body        []byte // JSON gzipado, pronto para o POST
 }
 
@@ -36,10 +38,13 @@ type Shipper struct {
 	maxBytes int
 	client   *http.Client
 
-	mu      sync.Mutex
-	queue   []queued
-	bytes   int
-	dropped int
+	mu            sync.Mutex
+	queue         []queued
+	bytes         int
+	dropped       int
+	lastSuccess   time.Time
+	latestVersion string
+	losses        [4]loss
 }
 
 // New monta o shipper. bufferWindows limita a fila em JANELAS e bufferBytes em BYTES
@@ -60,13 +65,13 @@ func (s *Shipper) Enqueue(snap wire.Snapshot) {
 	if err != nil {
 		slog.Error("encode failed, dropping window", "windowStart", snap.WindowStart, "err", err)
 		s.mu.Lock()
-		s.dropped++
+		s.recordDrop(dropEncode)
 		s.mu.Unlock()
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queue = append(s.queue, queued{windowStart: snap.WindowStart, body: body})
+	s.queue = append(s.queue, queued{windowStart: snap.WindowStart, enqueuedAt: time.Now(), body: body})
 	s.bytes += len(body)
 	for len(s.queue) > 0 && (len(s.queue) > s.max || (s.maxBytes > 0 && s.bytes > s.maxBytes)) {
 		// Nunca descarta a janela recém-enfileirada até o fim: se ela sozinha estourar o
@@ -75,10 +80,15 @@ func (s *Shipper) Enqueue(snap wire.Snapshot) {
 		if len(s.queue) == 1 {
 			break
 		}
+		reason := dropBufferWindows
+		if len(s.queue) <= s.max {
+			reason = dropBufferBytes
+		}
+		oldest := s.queue[0].windowStart
 		s.bytes -= len(s.queue[0].body)
 		s.queue = append([]queued(nil), s.queue[1:]...)
-		s.dropped++
-		slog.Warn("buffer full, dropping oldest window", "queued", len(s.queue), "bytes", s.bytes)
+		s.recordDrop(reason)
+		slog.Warn("buffer full, dropping oldest window", "windowStart", oldest, "reason", dropReasons[reason], "queued", len(s.queue), "bytes", s.bytes)
 	}
 }
 
@@ -95,7 +105,7 @@ func (s *Shipper) PendingBytes() int {
 	return s.bytes
 }
 
-// Dropped é o total de janelas perdidas desde a partida (buffer cheio ou encode falho).
+// Dropped é o total de janelas perdidas desde a partida (buffer, encode ou rejeição HTTP).
 // Antes elas sumiam com um log e mais nada — ninguém do nosso lado sabia que houve buraco.
 func (s *Shipper) Dropped() int {
 	s.mu.Lock()
@@ -129,6 +139,11 @@ func (s *Shipper) Flush(ctx context.Context) error {
 
 		transient, err := s.post(ctx, next)
 		if err != nil && transient {
+			s.mu.Lock()
+			if s.queue[0].failedSince.IsZero() {
+				s.queue[0].failedSince = time.Now()
+			}
+			s.mu.Unlock()
 			return err // mantém na fila; o loop de envio tenta de novo depois
 		}
 		if err != nil {
@@ -136,6 +151,11 @@ func (s *Shipper) Flush(ctx context.Context) error {
 				"windowStart", next.windowStart)
 		}
 		s.mu.Lock()
+		if err == nil {
+			s.lastSuccess = time.Now()
+		} else {
+			s.recordDrop(dropHTTPRejected)
+		}
 		s.bytes -= len(s.queue[0].body)
 		s.queue = s.queue[1:]
 		s.mu.Unlock()
@@ -159,6 +179,7 @@ func (s *Shipper) post(ctx context.Context, q queued) (bool, error) {
 	defer resp.Body.Close() //nolint:errcheck // corpo já lido/descartado; erro de close não é acionável
 	switch {
 	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		s.observeVersion(resp.Body)
 		return false, nil
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 		return true, fmt.Errorf("ingest %d", resp.StatusCode)

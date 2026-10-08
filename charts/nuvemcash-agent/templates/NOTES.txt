@@ -1,0 +1,15 @@
+Métricas locais: {{ if .Values.monitoring.metrics.enabled }}habilitadas em :8080/metrics{{ else }}desabilitadas{{ end }}.
+/healthz confirma o processo; /readyz confirma somente a sincronização inicial dos caches.
+
+{{ if .Values.monitoring.metrics.enabled }}
+kubectl -n {{ .Release.Namespace }} port-forward deployment/{{ .Release.Name }} 8080:8080
+curl http://localhost:8080/metrics
+
+{{ if and .Values.monitoring.podMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}PodMonitor criado: {{ .Release.Name }}-metrics. Confirme a seleção do namespace e dos labels pelo coletor.
+{{ else }}PodMonitor não criado (desabilitado ou CRD ausente). Configure o scrape de /metrics no coletor existente e acrescente cluster, namespace, release, environment e component=agent conforme monitoring.*.
+{{ end }}
+{{ if and .Values.monitoring.alerts.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}PrometheusRule criada: {{ .Release.Name }}-alerts. Confirme seleção, avaliação e entrega local separadamente.
+{{ else }}PrometheusRule não criada (desabilitada ou CRD ausente). Para obter as mesmas regras portáveis, renderize este chart com sua identidade e --api-versions monitoring.coreos.com/v1/PrometheusRule --show-only templates/prometheusrule.yaml e extraia .spec para o avaliador existente. Não aplique esse recurso simulado num cluster sem a CRD.
+{{ end }}
+Nenhuma stack de monitoramento é instalada. Alertas são locais ao cluster do agente; valide o destinatário local e a recuperação antes de considerar a integração concluída. O README descreve os quatro passos: scrape, seleção, avaliação e notificação.
+{{ end }}

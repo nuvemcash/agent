@@ -62,7 +62,9 @@ func run() error {
 	// kubelet mata o pod por liveness sem nunca deixá-lo terminar de subir — foi o que
 	// pôs o agente em CrashLoopBackOff num cluster de 19 nós / 512 pods / 2131 RS.
 	var ready atomic.Bool
-	go serveProbes(&ready)
+	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows, cfg.BufferBytes)
+	health := &collectionHealth{}
+	go serveProbes(&ready, shipper, health, cfg.MetricsEnabled)
 
 	rc, err := rest.InClusterConfig()
 	if err != nil {
@@ -105,7 +107,6 @@ func run() error {
 	slog.Info("agent started", "version", version, "clusterUid", clusterUID,
 		"scrape", cfg.ScrapeInterval, "ship", cfg.ShipInterval)
 
-	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows, cfg.BufferBytes)
 	window := aggregate.NewWindow(time.Now().UTC())
 	// Duração do último ciclo de scrape, para viajar na autotelemetria. Só o loop principal
 	// escreve e lê, na mesma goroutine.
@@ -177,7 +178,7 @@ func run() error {
 			}
 			nodes, _ := nodeLister.List(labels.Everything())
 			roundStart := time.Now()
-			for _, r := range scrapeNodes(ctx, client, nodes) {
+			for _, r := range scrapeNodes(ctx, client, nodes, health) {
 				// Cobertura do nó = intervalo entre scrapes bem-sucedidos DELE, contado
 				// uma vez aqui. Contar dentro do laço de pods multiplicaria a cobertura
 				// pela quantidade de pods do nó.
@@ -210,15 +211,26 @@ func run() error {
 // São endpoints distintos de propósito: durante a partida o agente está vivo mas ainda não
 // pronto, e responder 200 no liveness desde o primeiro instante é o que impede o kubelet de
 // reiniciá-lo em loop antes de ele chegar ao fim da sincronização.
-func serveProbes(ready *atomic.Bool) {
-	srv := &http.Server{Addr: ":8080", Handler: probeMux(ready), ReadHeaderTimeout: 5 * time.Second}
+func serveProbes(ready *atomic.Bool, shipper *ship.Shipper, health *collectionHealth, metricsEnabled bool) {
+	srv := &http.Server{Addr: ":8080", Handler: probeMux(ready, shipper, health, metricsEnabled), ReadHeaderTimeout: 5 * time.Second}
 	if err := srv.ListenAndServe(); err != nil {
 		slog.Error("probe listener failed", "err", err)
 	}
 }
 
-func probeMux(ready *atomic.Bool) *http.ServeMux {
+func probeMux(ready *atomic.Bool, shipper *ship.Shipper, health *collectionHealth, metricsEnabled bool) *http.ServeMux {
 	mux := http.NewServeMux()
+	if metricsEnabled {
+		mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			if err := shipper.WriteMetrics(w, version); err != nil {
+				return
+			}
+			if err := health.writeMetrics(w); err != nil {
+				return
+			}
+		})
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -290,7 +302,8 @@ type nodeSample struct {
 // único depois do Wait daria a todos os nós a hora do mais lento, deslocando a cobertura.
 //
 // Erro de um nó não aborta os demais — um kubelet fora do ar não pode zerar o ciclo.
-func scrapeNodes(ctx context.Context, client kubernetes.Interface, nodes []*corev1.Node) []nodeSample {
+func scrapeNodes(ctx context.Context, client kubernetes.Interface, nodes []*corev1.Node, health *collectionHealth) []nodeSample {
+	started := time.Now()
 	var (
 		mu   sync.Mutex
 		out  = make([]nodeSample, 0, len(nodes))
@@ -314,5 +327,6 @@ func scrapeNodes(ctx context.Context, client kubernetes.Interface, nodes []*core
 		}(n.Name)
 	}
 	wg.Wait()
+	health.observe(nodes, out, started)
 	return out
 }

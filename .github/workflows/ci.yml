@@ -24,3 +24,37 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12
+  monitoring:
+    name: Métricas e regras locais
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26.x"
+      - name: Prepara ferramentas upstream fixadas
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools_dir="$RUNNER_TEMP/agent-monitoring"
+          mkdir -p "$tools_dir"
+          cd "$tools_dir"
+          curl -fsSLO https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz
+          curl -fsSL https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz.sha256sum -o helm.sha256sum
+          sha256sum --check helm.sha256sum
+          tar -xzf helm-v3.19.0-linux-amd64.tar.gz linux-amd64/helm
+          install linux-amd64/helm "$tools_dir/helm"
+          curl -fsSLO https://github.com/prometheus/prometheus/releases/download/v3.15.0/prometheus-3.15.0.linux-amd64.tar.gz
+          curl -fsSL https://github.com/prometheus/prometheus/releases/download/v3.15.0/sha256sums.txt -o prometheus.sha256sums
+          sha256sum --ignore-missing --check prometheus.sha256sums
+          tar -xzf prometheus-3.15.0.linux-amd64.tar.gz prometheus-3.15.0.linux-amd64/promtool
+          install prometheus-3.15.0.linux-amd64/promtool "$tools_dir/promtool"
+          echo "$tools_dir" >> "$GITHUB_PATH"
+          python3 -m venv "$tools_dir/venv"
+          "$tools_dir/venv/bin/pip" install PyYAML==6.0.3 jsonschema==4.26.0
+      - name: Valida chart, CRDs, regras e exposição HTTP
+        shell: bash
+        run: |
+          helm lint charts/nuvemcash-agent --set connection.existingSecret=agent-token
+          "$RUNNER_TEMP/agent-monitoring/venv/bin/python" charts/nuvemcash-agent/tests/test_alerts.py
+          PROMTOOL=promtool go test ./cmd/agent -run TestMetricsConcurrentHTTPAndPrometheusFormat -count=1

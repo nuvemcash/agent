@@ -11,14 +11,15 @@ kind: Deployment
 metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
-  labels: {app.kubernetes.io/name: nuvemcash-agent}
+  labels: {app.kubernetes.io/name: nuvemcash-agent, app.kubernetes.io/instance: {{ .Release.Name | quote }}}
 spec:
   replicas: 1
   selector:
     matchLabels: {app.kubernetes.io/name: nuvemcash-agent}
   template:
     metadata:
-      labels: {app.kubernetes.io/name: nuvemcash-agent}
+      labels:
+        {{- toYaml (mergeOverwrite (deepCopy .Values.podLabels) (dict "app.kubernetes.io/name" "nuvemcash-agent" "app.kubernetes.io/instance" .Release.Name)) | nindent 8 }}
       annotations:
         # Muda o hash quando o token rotaciona, forçando um rollout do Deployment no mesmo
         # `helm upgrade --set connection.token=<novo>` — sem isso, só o Secret seria
@@ -38,6 +39,8 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            - name: NUVEMCASH_AGENT_METRICS_ENABLED
+              value: {{ .Values.monitoring.metrics.enabled | quote }}
             - name: NUVEMCASH_AGENT_TOKEN
               valueFrom:
                 secretKeyRef:
