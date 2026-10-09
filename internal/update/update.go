@@ -27,6 +27,9 @@ import (
 	"github.com/nuvemcash/agent/wire"
 )
 
+// errPendingMsg é o errPending (não exportado) do pacote action do Helm.
+const errPendingMsg = "another operation (install/upgrade/rollback) is in progress"
+
 // maxHistory espelha o default da CLI do Helm: sem ele o SDK guarda revisões sem limite.
 const maxHistory = 10
 
@@ -77,6 +80,12 @@ func (u *Updater) Run(ctx context.Context) error {
 	// ServerSideApply fica em "auto": segue o método da release, e a instalada pelo Helm 3
 	// continua em client-side apply.
 	_, err = up.RunWithContext(ctx, u.Release, ch, map[string]any{})
+	if err != nil && strings.Contains(err.Error(), errPendingMsg) {
+		// Outra operação (um helm upgrade manual) começou no meio: não é falha da versão, e
+		// relatá-la tiraria a versão das ofertas a este cluster. A próxima hora tenta de novo.
+		slog.Info("release operation in progress, skipping", "err", err)
+		return nil
+	}
 
 	report := wire.AgentUpdateReport{Version: target.Version, Outcome: wire.OutcomeApplied}
 	switch {
