@@ -75,8 +75,9 @@ spec:
             - name: NUVEMCASH_AGENT_LOG_LEVEL
               value: {{ $logging.level | default "info" | quote }}
             # Com o updater desligado não há CronJob: o coletor relata o desligamento à api.
+            # Mesma truthiness do `if $au.enabled` do updater.yaml: os dois nunca divergem.
             - name: NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED
-              value: {{ (.Values.autoUpgrade | default dict).enabled | toString | quote }}
+              value: {{ if (.Values.autoUpgrade | default dict).enabled }}"true"{{ else }}"false"{{ end }}
           ports:
             - {name: health, containerPort: 8080}
           # /healthz responde assim que o processo sobe; /readyz só depois que os caches

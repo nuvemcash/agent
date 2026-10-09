@@ -130,6 +130,49 @@ func TestChartTellsCollectorWhetherAutoUpgradeIsEnabled(t *testing.T) {
 	}
 }
 
+// O coletor e o updater têm de concordar sobre "ligado": a env deriva da mesma truthiness
+// do `if $au.enabled` do updater.yaml. Com o schema o chart rejeita string; o que sobra
+// vivo é null (Helm apaga a chave, sem default: desligado), false e true.
+func TestChartCollectorEnvAgreesWithUpdaterRender(t *testing.T) {
+	cases := map[string]struct {
+		au      any
+		enabled bool
+	}{
+		"true":    {au: map[string]any{"enabled": true}, enabled: true},
+		"false":   {au: map[string]any{"enabled": false}, enabled: false},
+		"null":    {au: map[string]any{"enabled": nil}, enabled: false}, // null apaga a chave: sem updater, e a env diz false
+		"ausente": {au: map[string]any{}, enabled: true},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := render(t, map[string]any{"autoUpgrade": c.au})
+			dep, ok := find[*appsv1.Deployment](r, releaseName)
+			if !ok {
+				t.Fatal("Deployment do coletor ausente")
+			}
+			got := ""
+			for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+				if e.Name == "NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED" {
+					got = e.Value
+				}
+			}
+			_, hasUpdater := find[*batchv1.CronJob](r, releaseName+"-updater")
+			if want := strconv.FormatBool(c.enabled); got != want || hasUpdater != c.enabled {
+				t.Fatalf("env = %q, updater renderizado = %v; quer %q e %v", got, hasUpdater, want, c.enabled)
+			}
+		})
+	}
+	t.Run("string é rejeitada pelo schema", func(t *testing.T) {
+		cfg := helmConfig(t, nil)
+		in := action.NewInstall(cfg)
+		in.ReleaseName, in.Namespace, in.DryRunStrategy = releaseName, namespace, action.DryRunClient
+		vals := map[string]any{"connection": map[string]any{"token": token}, "autoUpgrade": map[string]any{"enabled": "false"}}
+		if _, err := in.Run(loadChart(t, "0.1.0"), vals); err == nil {
+			t.Fatal(`autoUpgrade.enabled: "false" (string) deveria ser rejeitado pelo schema`)
+		}
+	})
+}
+
 func rulesOf(t *testing.T, r rendered) (collector, ceiling, role []rbacv1.PolicyRule) {
 	t.Helper()
 	cr, ok1 := find[*rbacv1.ClusterRole](r, releaseName)
