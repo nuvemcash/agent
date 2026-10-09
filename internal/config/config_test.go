@@ -49,3 +49,42 @@ func TestMetricsDefaultAndOptOut(t *testing.T) {
 		t.Fatal("booleano inválido deve ser recusado")
 	}
 }
+
+func TestLoadUpdaterDefaultsAndRequired(t *testing.T) {
+	t.Setenv("NUVEMCASH_AGENT_TOKEN", "tok")
+	t.Setenv("NUVEMCASH_UPDATER_RELEASE", "nuvemcash-agent")
+	t.Setenv("NUVEMCASH_UPDATER_NAMESPACE", "nuvemcash-system")
+	c, err := LoadUpdater()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.URL != "https://ingest.nuvem.cash" || c.Chart != "oci://ghcr.io/nuvemcash/charts/nuvemcash-agent" ||
+		c.Timeout != 5*time.Minute || c.PlainHTTP || c.Release != "nuvemcash-agent" || c.Namespace != "nuvemcash-system" {
+		t.Fatalf("defaults errados: %+v", c)
+	}
+	for _, k := range []string{"NUVEMCASH_AGENT_TOKEN", "NUVEMCASH_UPDATER_RELEASE", "NUVEMCASH_UPDATER_NAMESPACE"} {
+		t.Run(k, func(t *testing.T) {
+			t.Setenv(k, "")
+			if _, err := LoadUpdater(); err == nil {
+				t.Fatalf("%s vazio devia falhar", k)
+			}
+		})
+	}
+}
+
+func TestLoadUpdaterOverrides(t *testing.T) {
+	t.Setenv("NUVEMCASH_AGENT_TOKEN", "tok")
+	t.Setenv("NUVEMCASH_UPDATER_RELEASE", "r")
+	t.Setenv("NUVEMCASH_UPDATER_NAMESPACE", "ns")
+	t.Setenv("NUVEMCASH_UPDATER_CHART", "oci://registry:5000/charts/nuvemcash-agent")
+	t.Setenv("NUVEMCASH_UPDATER_PLAIN_HTTP", "true")
+	t.Setenv("NUVEMCASH_UPDATER_TIMEOUT", "45s")
+	c, err := LoadUpdater()
+	if err != nil || c.Chart != "oci://registry:5000/charts/nuvemcash-agent" || !c.PlainHTTP || c.Timeout != 45*time.Second {
+		t.Fatalf("override falhou: %+v %v", c, err)
+	}
+	t.Setenv("NUVEMCASH_UPDATER_PLAIN_HTTP", "talvez")
+	if _, err := LoadUpdater(); err == nil {
+		t.Fatal("booleano inválido devia falhar")
+	}
+}

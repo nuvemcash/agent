@@ -1,5 +1,6 @@
 // nuvemcash-agent: coletor read-only de uso de Kubernetes para o nuvem.cash.
-// Modo default = agente; subcomando "devsink" = receptor local de desenvolvimento (e2e).
+// Modo default = agente; subcomando "update" = updater da atualização automática (CronJob do
+// chart); subcomando "devsink" = receptor local de desenvolvimento (e2e).
 package main
 
 import (
@@ -38,6 +39,13 @@ func main() {
 		srv := &http.Server{Addr: ":8081", Handler: devsink.Handler(os.Stdout), ReadHeaderTimeout: 5 * time.Second}
 		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("devsink", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "update" {
+		if err := runUpdate(); err != nil {
+			slog.Error("agent update failed", "err", err)
 			os.Exit(1)
 		}
 		return
