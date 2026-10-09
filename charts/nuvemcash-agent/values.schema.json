@@ -84,6 +84,25 @@
         }
       }
     },
+    "logging": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "enum": [
+            "json",
+            "text"
+          ]
+        },
+        "level": {
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ]
+        }
+      }
+    },
     "podLabels": {
       "type": "object",
       "additionalProperties": {
