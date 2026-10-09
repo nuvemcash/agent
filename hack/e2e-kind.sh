@@ -5,7 +5,8 @@
 # Atualização automática (ADR 0017, api#326): o updater, a partir de um registry OCI
 # local, aplica o chart inteiro N→N+1 preservando token e values, reverte uma imagem
 # quebrada (rolled_back), é recusado ao pedir RBAC acima do teto (rejected_by_ceiling, com
-# a ClusterRole intacta) e atualiza a própria imagem. A troca de pods não mede os mesmos
+# a ClusterRole intacta), atualiza a própria imagem e se abstém quando a release é do Flux
+# (abstained, sem tocar na release). A troca de pods não mede os mesmos
 # segundos duas vezes.
 #
 # CLUSTER e REGISTRY permitem isolar execuções paralelas; o script não apaga nada ao fim.
@@ -15,7 +16,7 @@ cd "$(dirname "$0")/.."
 CLUSTER=${CLUSTER:-agent-e2e}
 REGISTRY=${REGISTRY:-agent-e2e-registry}
 NODE_IMAGE="kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5"
-REPO=ghcr.io/nuvemcash/agent # o repositório padrão: registry espelhado é abstenção (T3)
+REPO=ghcr.io/nuvemcash/agent # o repositório padrão: registry espelhado é abstenção
 NS=nuvemcash-system
 REL=nuvemcash-agent
 SCRAPE=10
@@ -192,5 +193,16 @@ want_outcome $VCEILING rejected_by_ceiling
 [ "$(kubectl get clusterrole $REL -o jsonpath='{.rules}')" = "$RULES_BEFORE" ] || fail "ClusterRole do coletor mudou"
 [ "$(release | jq -r .version)" = $V1 ] || fail "release não ficou em $V1"
 echo "== RBAC acima do teto recusado OK =="
+
+# --- Release do Flux: o marcador de posse nos recursos leva à abstenção, sem escrita.
+REV_BEFORE=$(helm history $REL -n $NS -o json | jq length)
+kubectl -n $NS label deploy/$REL helm.toolkit.fluxcd.io/name=agent >/dev/null
+run_updater upd-flux
+want_outcome $V1 abstained
+kubectl logs deploy/devsink | grep "agent-update outcome version=$V1 outcome=abstained reason=\"gitops_flux\"" >/dev/null ||
+  fail "devsink não recebeu o motivo gitops_flux"
+[ "$(helm history $REL -n $NS -o json | jq length)" = "$REV_BEFORE" ] || fail "a abstenção escreveu na release"
+[ "$(release | jq -r .version)" = $V1 ] || fail "release não ficou em $V1"
+echo "== abstenção sob Flux OK =="
 
 echo "== e2e OK =="
