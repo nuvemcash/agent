@@ -107,3 +107,41 @@ func durationDefault(k string, d time.Duration) (time.Duration, error) {
 	}
 	return out, nil
 }
+
+// Updater é a configuração do subcomando "update" (atualização automática). Token e URL
+// são os mesmos do agente; o resto o chart injeta no CronJob.
+type Updater struct {
+	Token     string // token do cluster (nunca logar)
+	URL       string
+	Release   string // release Helm do agente
+	Namespace string
+	Chart     string        // repositório OCI do chart, sem tag
+	PlainHTTP bool          // só para registry local de teste (e2e)
+	Timeout   time.Duration // espera de readiness do upgrade e do rollback
+}
+
+func LoadUpdater() (Updater, error) {
+	c := Updater{
+		Token:     os.Getenv("NUVEMCASH_AGENT_TOKEN"),
+		URL:       getenvDefault("NUVEMCASH_AGENT_URL", "https://ingest.nuvem.cash"),
+		Release:   os.Getenv("NUVEMCASH_UPDATER_RELEASE"),
+		Namespace: os.Getenv("NUVEMCASH_UPDATER_NAMESPACE"),
+		Chart:     getenvDefault("NUVEMCASH_UPDATER_CHART", "oci://ghcr.io/nuvemcash/charts/nuvemcash-agent"),
+	}
+	for k, v := range map[string]string{"NUVEMCASH_AGENT_TOKEN": c.Token,
+		"NUVEMCASH_UPDATER_RELEASE": c.Release, "NUVEMCASH_UPDATER_NAMESPACE": c.Namespace} {
+		if v == "" {
+			return Updater{}, fmt.Errorf("%s é obrigatório", k)
+		}
+	}
+	var err error
+	if v := os.Getenv("NUVEMCASH_UPDATER_PLAIN_HTTP"); v != "" {
+		if c.PlainHTTP, err = strconv.ParseBool(v); err != nil {
+			return Updater{}, fmt.Errorf("NUVEMCASH_UPDATER_PLAIN_HTTP inválido: %q", v)
+		}
+	}
+	if c.Timeout, err = durationDefault("NUVEMCASH_UPDATER_TIMEOUT", 5*time.Minute); err != nil {
+		return Updater{}, err
+	}
+	return c, nil
+}
