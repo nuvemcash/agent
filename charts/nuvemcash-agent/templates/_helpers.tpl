@@ -1,3 +1,8 @@
+{{- /* Imagem do agente. O updater usa a MESMA: a imagem dele sobe junto com a do coletor. */ -}}
+{{- define "nuvemcash-agent.image" -}}
+{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
+
 {{- define "nuvemcash-agent.secretName" -}}
 {{- if .Values.connection.existingSecret -}}
 {{ .Values.connection.existingSecret }}

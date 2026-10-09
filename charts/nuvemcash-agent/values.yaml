@@ -45,6 +45,22 @@ resources:
   limits:
     memory: 256Mi
 
+# Atualização automática (ADR 0017): um CronJob de hora em hora pergunta ao nuvem.cash a
+# versão alvo deste cluster e aplica o chart inteiro dela, por digest, com identidade
+# própria. O teto de permissões dessa identidade (templates/updater.yaml) é o máximo que
+# uma atualização consegue conceder ao agente: versão que pede mais é recusada pelo
+# próprio Kubernetes e fica para um upgrade manual, com o seu consentimento.
+autoUpgrade:
+  # false: o chart não renderiza o CronJob nem as permissões do updater.
+  enabled: true
+  # Repositório OCI do chart, sem tag (o alvo vem com digest).
+  chart: oci://ghcr.io/nuvemcash/charts/nuvemcash-agent
+  # Só para registry local de teste, sem TLS.
+  plainHTTP: false
+  # Espera de readiness do upgrade e, se ele falhar, a do rollback. As duas somadas têm de
+  # caber nos 15 minutos de uma execução: não passe de 6m.
+  timeout: 5m
+
 podLabels: {}
 nodeSelector: {}
 tolerations: []

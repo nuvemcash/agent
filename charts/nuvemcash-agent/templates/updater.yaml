@@ -1,0 +1,203 @@
+{{- /*
+  Atualização automática (ADR 0017): o updater é o subcomando `update` do mesmo binário,
+  num CronJob com identidade própria, separada da do coletor.
+
+  O TETO DE PERMISSÕES é a ClusterRole <release>-updater: leitura ampla e explícita, sem
+  secrets, mais update/patch só nas ClusterRole/ClusterRoleBinding do próprio agente. Nunca
+  escalate, bind ou "*". O apiserver só deixa gravar uma role cujas permissões quem grava já
+  tem; por isso uma versão que pede além do teto é recusada pelo Kubernetes, o Helm reverte
+  e ela fica para o upgrade manual, onde o cliente consente. Mudar o teto também é sempre
+  upgrade manual. internal/update/chart_test.go garante essas propriedades no render.
+
+  `--reuse-values` não traz os defaults de um chart novo: quem vier de um release sem o
+  bloco autoUpgrade cai no required abaixo, com a instrução do que fazer.
+*/}}
+{{- $au := required "bloco `autoUpgrade` ausente nos values: troque --reuse-values por --reset-then-reuse-values" .Values.autoUpgrade }}
+{{- if $au.enabled }}
+{{- $name := printf "%s-updater" .Release.Name }}
+{{- $labels := dict "app.kubernetes.io/name" "nuvemcash-agent-updater" "app.kubernetes.io/instance" .Release.Name }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- toYaml $labels | nindent 4 }}
+---
+# Objetos que o chart renderiza no namespace, mais os Secrets de release do Helm — que
+# mudam de nome a cada revisão e por isso não se restringem por nome.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- toYaml $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["podmonitors", "prometheusrules"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # A própria Role/RoleBinding: leitura no namespace (a espera do Helm observa os objetos)
+  # e escrita só por nome.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    resourceNames: [{{ $name | quote }}]
+    verbs: ["update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- toYaml $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+# O teto de permissões. A lista de leitura contém com folga o que o coletor lê hoje
+# (templates/rbac.yaml), para correções de RBAC de leitura subirem sozinhas.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "namespaces", "persistentvolumeclaims", "persistentvolumes",
+                "services", "endpoints", "events", "replicationcontrollers", "resourcequotas",
+                "limitranges", "serviceaccounts"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets", "deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings"]
+    resourceNames: [{{ .Release.Name | quote }}, {{ $name | quote }}]
+    verbs: ["update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # Sem retry agressivo: a próxima tentativa é a execução da hora seguinte.
+      backoffLimit: 0
+      # Limite de uma execução; casa com runDeadline em cmd/agent/update.go.
+      activeDeadlineSeconds: 900
+      template:
+        metadata:
+          labels: {{- toYaml $labels | nindent 12 }}
+        spec:
+          serviceAccountName: {{ $name }}
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile: {type: RuntimeDefault}
+          containers:
+            - name: updater
+              image: {{ include "nuvemcash-agent.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              args: ["update"]
+              env:
+                - name: NUVEMCASH_AGENT_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "nuvemcash-agent.secretName" . }}
+                      key: token
+                - name: NUVEMCASH_AGENT_URL
+                  value: {{ .Values.connection.url | quote }}
+                - name: NUVEMCASH_UPDATER_RELEASE
+                  value: {{ .Release.Name | quote }}
+                - name: NUVEMCASH_UPDATER_NAMESPACE
+                  value: {{ .Release.Namespace | quote }}
+                - name: NUVEMCASH_UPDATER_CHART
+                  value: {{ $au.chart | quote }}
+                - name: NUVEMCASH_UPDATER_PLAIN_HTTP
+                  value: {{ $au.plainHTTP | quote }}
+                - name: NUVEMCASH_UPDATER_TIMEOUT
+                  value: {{ $au.timeout | quote }}
+                # Caches do cliente Kubernetes e do registry; a raiz é somente leitura.
+                - name: HOME
+                  value: /tmp
+              volumeMounts:
+                - {name: tmp, mountPath: /tmp}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: {drop: [ALL]}
+              resources:
+                requests: {cpu: 20m, memory: 64Mi}
+                limits: {memory: 256Mi}
+          volumes:
+            - {name: tmp, emptyDir: {}}
+          {{- with .Values.nodeSelector }}
+          nodeSelector: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations: {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}
