@@ -349,3 +349,19 @@ func TestRunFailsWhenAPIRejectsToken(t *testing.T) {
 		t.Fatal("nada pode ser aplicado sem alvo")
 	}
 }
+
+// Um helm upgrade manual que começa entre a consulta e a aplicação não é falha da versão:
+// relatar rolled_back tiraria a versão das ofertas a este cluster para sempre.
+func TestRunConcurrentOperationIsNotAFailure(t *testing.T) {
+	h := newHarness(t, nil)
+	fetch := h.u.Fetch
+	h.u.Fetch = func(ctx context.Context, tg wire.AgentUpdateTarget) (*chartv2.Chart, error) {
+		markPending(t, h.cfg, 0)
+		return fetch(ctx, tg)
+	}
+	h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+	if err := h.u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.wantReports(t)
+}
