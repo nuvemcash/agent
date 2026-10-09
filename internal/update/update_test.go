@@ -111,6 +111,17 @@ func (f *failOnce) Update(original, target kube.ResourceList, opts ...kube.Clien
 	return f.FailingKubeClient.Update(original, target, opts...)
 }
 
+// managerAtUpdate grava o field manager vigente no momento do apply.
+type managerAtUpdate struct {
+	*kubefake.FailingKubeClient
+	got string
+}
+
+func (m *managerAtUpdate) Update(original, target kube.ResourceList, opts ...kube.ClientUpdateOption) (*kube.Result, error) {
+	m.got = kube.ManagedFieldsManager
+	return m.FailingKubeClient.Update(original, target, opts...)
+}
+
 func loadChart(t *testing.T, version string) *chartv2.Chart {
 	t.Helper()
 	ch, err := loader.LoadDir(chartDir)
@@ -517,5 +528,23 @@ func TestRunDoesNotAbstainOnDefaultRegistryOrUnrelatedMetadata(t *testing.T) {
 			}
 			h.wantReports(t, wire.OutcomeApplied)
 		})
+	}
+}
+
+// O apply sai como o helm CLI ("helm"): com o manager do binário ("agent") o SSA conflita
+// com a release que o cliente atualizou à mão pelo Helm 4 (api#316).
+func TestRunAppliesWithHelmCLIFieldManager(t *testing.T) {
+	prev := kube.ManagedFieldsManager
+	t.Cleanup(func() { kube.ManagedFieldsManager = prev })
+	kube.ManagedFieldsManager = ""
+	kc := &managerAtUpdate{FailingKubeClient: &kubefake.FailingKubeClient{PrintingKubeClient: kubefake.PrintingKubeClient{Out: io.Discard}}}
+	h := newHarness(t, kc)
+	h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+	if err := h.u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	h.wantReports(t, wire.OutcomeApplied)
+	if kc.got != "helm" {
+		t.Fatalf("field manager no apply: quer %q, veio %q", "helm", kc.got)
 	}
 }
