@@ -28,6 +28,91 @@ já aplica o Secret e reinicia o agente automaticamente. Com `existingSecret`, o
 Deployment fica por conta de quem opera o Secret externo (`kubectl rollout restart
 deployment/nuvemcash-agent -n nuvemcash-system` após atualizá-lo).
 
+## Atualização automática
+
+Por padrão (`autoUpgrade.enabled=true`) o chart instala, além do coletor, um `CronJob`
+`<release>-updater` que roda de hora em hora com a própria imagem do agente
+(`agent update`) e uma `ServiceAccount` separada da do coletor. A cada execução ele:
+
+1. pergunta ao nuvem.cash, com o token do cluster, qual é a versão alvo deste cluster;
+2. se houver alvo, baixa o chart inteiro daquela versão **pelo digest** (uma tag movida
+   no registry não chega ao cluster) e roda `helm upgrade` com os values da sua
+   instalação, o token inclusive;
+3. se a nova versão não sobe, o Helm reverte sozinho e o desfecho é relatado.
+
+Só entram versões estáveis da **mesma major** (patch e minor). Uma major nunca é aplicada
+automaticamente. Como o `CronJob` faz parte do chart, o updater atualiza a própria imagem
+junto com a do agente. A troca do coletor é um rolling update sem indisponibilidade.
+
+### Teto de permissões
+
+O updater é o único componente do agente que escreve no cluster, e o que ele pode
+conceder é limitado por um teto fixo, que você aprova ao instalar o chart:
+
+- **No namespace do release:** gerencia o que o chart renderiza ali (Deployment, CronJob,
+  ServiceAccount, Role/RoleBinding, PodMonitor, PrometheusRule) e os Secrets, porque o
+  Helm guarda cada revisão da release num Secret cujo nome muda a cada revisão. Isso inclui
+  o Secret do token. Fora do namespace do agente, ele **não lê Secrets**.
+- **No cluster:** `get/list/watch` sobre uma lista explícita de recursos, **sem `secrets`**
+  (e `nodes/proxy get`, o mesmo que o coletor usa), mais `update/patch` apenas nas
+  `ClusterRole` e `ClusterRoleBinding` do próprio agente, restritos por `resourceNames`.
+- **Nunca** `escalate`, `bind` ou `*`.
+
+O Kubernetes só deixa gravar uma role cujas permissões quem grava já possui. Por isso
+uma versão que peça permissão acima do teto é **recusada pelo próprio apiserver**, sofre
+rollback e fica para o upgrade manual (o `helm upgrade` do modal de conexão), onde você
+consente conscientemente. Mudar o teto é sempre um upgrade manual. A definição está em
+[`templates/updater.yaml`](charts/nuvemcash-agent/templates/updater.yaml).
+
+### Desligar
+
+```bash
+helm upgrade nuvemcash-agent oci://ghcr.io/nuvemcash/charts/nuvemcash-agent \
+  --namespace nuvemcash-system --reset-then-reuse-values \
+  --set autoUpgrade.enabled=false
+```
+
+Desligado, o chart não renderiza o `CronJob` nem nenhuma permissão do updater, e você
+atualiza o agente à mão. Use `--reset-then-reuse-values` (não `--reuse-values`) em upgrades
+vindos de um release anterior à atualização automática: o `--reuse-values` não traz os
+defaults do chart novo.
+
+### Flux, Argo CD, Renovate e registry espelhado
+
+O updater **não briga com quem já gerencia o agente**. Ele só lê o cluster e, sem aplicar
+nada, relata `abstained` ao nuvem.cash (a aba Clusters mostra "gerenciado externamente")
+quando:
+
+- os recursos da release têm marcadores do Flux (`helm.toolkit.fluxcd.io/*`) ou do Argo CD
+  (`argocd.argoproj.io/*`);
+- `image.repository` é diferente do padrão (`ghcr.io/nuvemcash/agent`): o digest do alvo
+  pode não existir no seu espelho.
+
+Nesses casos o caminho é o seu GitOps: fixe a versão do chart no `HelmRelease` ou na
+`Application` e deixe o Renovate (ou o Dependabot) abrir o PR quando sair uma versão nova
+em `oci://ghcr.io/nuvemcash/charts/nuvemcash-agent`. Recomendamos também
+`autoUpgrade.enabled=false` nesses clusters, para o chart não renderizar um `CronJob` que
+não vai agir.
+
+### Verificar a assinatura
+
+A imagem e o chart de cada release são assinados com [cosign](https://docs.sigstore.dev)
+keyless (Sigstore), pela identidade do workflow de release deste repositório:
+
+```bash
+IDENTITY='^https://github\.com/nuvemcash/agent/\.github/workflows/release\.yml@refs/tags/v.+$'
+ISSUER=https://token.actions.githubusercontent.com
+
+cosign verify ghcr.io/nuvemcash/agent:<versão> \
+  --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
+cosign verify ghcr.io/nuvemcash/charts/nuvemcash-agent:<versão> \
+  --certificate-identity-regexp "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
+```
+
+O updater **não** verifica a assinatura antes de aplicar; ele confia no digest informado
+pelo nuvem.cash. Para impor a verificação no cluster, use uma política de admissão
+(Kyverno `verifyImages` ou o policy-controller do Sigstore) com a mesma identidade.
+
 ## O que o agente coleta
 
 - Inventário de nós (capacidade, allocatable, labels, providerID), PVCs e Services LB
@@ -70,8 +155,12 @@ devsink`) e o chart apontando pra ele, e aguarda até um snapshot com uso chegar
 ./hack/e2e-kind.sh
 ```
 
-Critério de aceite da Fase 2. O script não apaga o cluster ao final; para limpar:
-`kind delete cluster --name agent-e2e`.
+Critério de aceite da Fase 2. O mesmo script cobre a atualização automática, a partir de
+um registry OCI local: N→N+1 com token preservado, imagem quebrada revertida
+(`rolled_back`), RBAC acima do teto recusado (`rejected_by_ceiling`), a própria imagem do
+updater atualizada e a abstenção sob Flux. Precisa de `docker`, `kind`, `helm` 4, `jq` e
+`python3`; `CLUSTER` e `REGISTRY` isolam execuções paralelas. O script não apaga o cluster
+ao final; para limpar: `kind delete cluster --name agent-e2e` e `docker rm -f agent-e2e-registry`.
 
 ## Monitoramento local
 
