@@ -1,10 +1,12 @@
 # nuvemcash-agent
 
-> Read-only Kubernetes usage collector for [nuvem.cash](https://nuvem.cash) — ships
-> aggregated CPU/memory usage, node & PVC inventory to your nuvem.cash workspace. No
-> secrets are read; nothing is mutated in your cluster. Apache-2.0.
+> Kubernetes usage collector for [nuvem.cash](https://nuvem.cash) — ships aggregated
+> CPU/memory usage, node & PVC inventory to your nuvem.cash workspace. The collector is
+> read-only and reads no Secrets. The auto-updater (on by default, off with
+> `autoUpgrade.enabled=false`) runs `helm upgrade` and writes to the release namespace,
+> Secrets included, within a fixed permission ceiling. Apache-2.0.
 
-Agente de coleta do nuvem.cash para clusters Kubernetes. Ele observa a kube API
+Agente de coleta do nuvem.cash para clusters Kubernetes. O coletor observa a kube API
 (somente leitura) e o kubelet (via apiserver proxy), agrega o uso por workload em
 janelas de 5 minutos e envia para o nuvem.cash, onde o custo real da fatura do provedor
 é rateado por namespace e workload.
@@ -118,9 +120,15 @@ pelo nuvem.cash. Para impor a verificação no cluster, use uma política de adm
 
 - Inventário de nós (capacidade, allocatable, labels, providerID), PVCs e Services LB
 - Uso de CPU/memória por pod (kubelet Summary API), agregado por workload
-- Nada de Secrets/ConfigMaps; RBAC estritamente somente-leitura
+- Nada de Secrets/ConfigMaps; o RBAC do **coletor** é estritamente somente-leitura
 
-Sendo honesto sobre o RBAC: `nodes/proxy` é uma permissão ampla do kubelet (é o preço de
+O **updater** (ligado por padrão) não coleta nada, mas escreve: roda `helm upgrade`, lê e
+grava Secrets no namespace do release (o do token e os de revisão do Helm) e atualiza as
+`ClusterRole`/`ClusterRoleBinding` do próprio agente, sempre dentro do
+[teto de permissões](#teto-de-permissões). Para um agente sem nenhuma escrita no cluster,
+instale com `autoUpgrade.enabled=false`.
+
+Sendo honesto sobre o RBAC do coletor: `nodes/proxy` é uma permissão ampla do kubelet (é o preço de
 falar com ele via apiserver proxy em vez de TLS direto) — mas o agente só usa essa
 permissão para um `GET stats/summary` por nó. Todo o resto do RBAC é `get`/`list`/`watch`
 mínimo sobre os recursos listados acima.
