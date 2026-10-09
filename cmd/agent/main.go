@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -35,8 +36,11 @@ var version = "dev" // injetada por -ldflags "-X main.version=vX.Y.Z"
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "devsink" {
-		slog.Info("devsink listening", "addr", ":8081", "path", wire.Path)
-		srv := &http.Server{Addr: ":8081", Handler: devsink.Handler(os.Stdout), ReadHeaderTimeout: 5 * time.Second}
+		// Alvo da atualização automática no formato <versão>@<digest>; vazio = nenhum.
+		var target wire.AgentUpdateTarget
+		target.Version, target.ChartDigest, _ = strings.Cut(os.Getenv("NUVEMCASH_DEVSINK_AGENT_TARGET"), "@")
+		slog.Info("devsink listening", "addr", ":8081", "path", wire.Path, "agentTarget", target.Version)
+		srv := &http.Server{Addr: ":8081", Handler: devsink.Handler(os.Stdout, target), ReadHeaderTimeout: 5 * time.Second}
 		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("devsink", "err", err)
 			os.Exit(1)
