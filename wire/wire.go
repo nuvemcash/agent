@@ -138,6 +138,14 @@ const (
 	OutcomeAbstained AgentUpdateOutcome = "abstained"
 )
 
+// Motivos de OutcomeAbstained (conjunto fechado, validado pela api).
+const (
+	ReasonGitOpsFlux       = "gitops_flux"
+	ReasonGitOpsArgo       = "gitops_argo"
+	ReasonMirroredRegistry = "mirrored_registry"
+	ReasonDisabled         = "disabled"
+)
+
 // AgentUpdateReport é o relato de desfecho enviado à api.
 type AgentUpdateReport struct {
 	Version string             `json:"version"`

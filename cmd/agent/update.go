@@ -9,6 +9,7 @@ import (
 
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/cli"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/nuvemcash/agent/internal/config"
 	"github.com/nuvemcash/agent/internal/update"
@@ -33,9 +34,18 @@ func runUpdate() error {
 	if err := helm.Init(settings.RESTClientGetter(), cfg.Namespace, "secret"); err != nil {
 		return err
 	}
+	rc, err := settings.RESTClientGetter().ToRESTConfig()
+	if err != nil {
+		return err
+	}
+	kube, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		return err
+	}
 	u := update.Updater{
 		API:          update.API{URL: cfg.URL, Token: cfg.Token, Client: &http.Client{Timeout: 30 * time.Second}},
 		Helm:         helm,
+		Kube:         kube,
 		Release:      cfg.Release,
 		Namespace:    cfg.Namespace,
 		Fetch:        update.OCIFetcher{Chart: cfg.Chart, PlainHTTP: cfg.PlainHTTP}.Fetch,

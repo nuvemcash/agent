@@ -22,8 +22,13 @@ import (
 	rspb "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage"
 	"helm.sh/helm/v4/pkg/storage/driver"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nuvemcash/agent/internal/update"
 	"github.com/nuvemcash/agent/wire"
@@ -172,18 +177,77 @@ func deployed(t *testing.T, cfg *action.Configuration) *rspb.Release {
 type harness struct {
 	api     *fakeAPI
 	cfg     *action.Configuration
+	kube    *fake.Clientset
 	u       *update.Updater
 	fetched []wire.AgentUpdateTarget
 }
 
+const defaultImage = "ghcr.io/nuvemcash/agent"
+
+// agentDeployment é o coletor como o chart o renderiza; opts mexem em labels, annotations
+// ou imagem antes de ele entrar no clientset falso.
+func agentDeployment(image string, opts ...func(*metav1.ObjectMeta)) *appsv1.Deployment {
+	d := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: releaseName, Namespace: namespace}}
+	d.Spec.Template.Spec.Containers = []corev1.Container{{Name: "agent", Image: image}}
+	for _, o := range opts {
+		o(&d.ObjectMeta)
+	}
+	return d
+}
+
+func updaterCronJob(opts ...func(*metav1.ObjectMeta)) *batchv1.CronJob {
+	c := &batchv1.CronJob{ObjectMeta: metav1.ObjectMeta{Name: releaseName + "-updater", Namespace: namespace}}
+	for _, o := range opts {
+		o(&c.ObjectMeta)
+	}
+	return c
+}
+
+func withLabel(k, v string) func(*metav1.ObjectMeta) {
+	return func(m *metav1.ObjectMeta) {
+		if m.Labels == nil {
+			m.Labels = map[string]string{}
+		}
+		m.Labels[k] = v
+	}
+}
+
+func withAnnotation(k, v string) func(*metav1.ObjectMeta) {
+	return func(m *metav1.ObjectMeta) {
+		if m.Annotations == nil {
+			m.Annotations = map[string]string{}
+		}
+		m.Annotations[k] = v
+	}
+}
+
 func newHarness(t *testing.T, kc kube.Interface) *harness {
 	t.Helper()
-	h := &harness{api: &fakeAPI{}, cfg: helmConfig(t, kc)}
+	return newHarnessWith(t, kc, agentDeployment(defaultImage+":0.1.0"), updaterCronJob())
+}
+
+func newHarnessWith(t *testing.T, kc kube.Interface, live ...any) *harness {
+	t.Helper()
+	h := &harness{api: &fakeAPI{}, cfg: helmConfig(t, kc), kube: fake.NewClientset()}
+	for _, o := range live {
+		var err error
+		switch o := o.(type) {
+		case *appsv1.Deployment:
+			_, err = h.kube.AppsV1().Deployments(namespace).Create(context.Background(), o, metav1.CreateOptions{})
+		case *batchv1.CronJob:
+			_, err = h.kube.BatchV1().CronJobs(namespace).Create(context.Background(), o, metav1.CreateOptions{})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.kube.ClearActions()
 	srv := h.api.server(t)
 	install(t, h.cfg)
 	h.u = &update.Updater{
 		API:     update.API{URL: srv.URL, Token: token, Client: srv.Client()},
 		Helm:    h.cfg,
+		Kube:    h.kube,
 		Release: releaseName, Namespace: namespace,
 		Fetch: func(_ context.Context, tg wire.AgentUpdateTarget) (*chartv2.Chart, error) {
 			h.fetched = append(h.fetched, tg)
@@ -364,4 +428,94 @@ func TestRunConcurrentOperationIsNotAFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.wantReports(t)
+}
+
+// A abstenção não escreve nada: nem no cluster (só leituras no clientset), nem na release,
+// nem consulta o alvo — só relata o motivo.
+func (h *harness) wantAbstained(t *testing.T, reason, version string) {
+	t.Helper()
+	h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+	if err := h.u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rep := h.wantReports(t, wire.OutcomeAbstained)
+	if rep[0].Reason != reason || rep[0].Version != version {
+		t.Fatalf("relato: quer %s em %s, veio %+v", reason, version, rep[0])
+	}
+	if len(h.api.queried) != 0 || len(h.fetched) != 0 || last(t, h.cfg).Version != 1 {
+		t.Fatalf("abstenção não pode consultar, baixar nem aplicar: %v %v", h.api.queried, h.fetched)
+	}
+	for _, a := range h.kube.Actions() {
+		if a.GetVerb() != "get" && a.GetVerb() != "list" {
+			t.Fatalf("abstenção escreveu no cluster: %v", a)
+		}
+	}
+}
+
+func TestRunAbstainsUnderFluxOwnership(t *testing.T) {
+	for name, live := range map[string][]any{
+		"deployment": {agentDeployment(defaultImage+":0.1.0", withLabel("helm.toolkit.fluxcd.io/name", "agent")), updaterCronJob()},
+		"cronjob":    {agentDeployment(defaultImage + ":0.1.0"), updaterCronJob(withLabel("helm.toolkit.fluxcd.io/namespace", "flux-system"))},
+		"annotation": {agentDeployment(defaultImage+":0.1.0", withAnnotation("helm.toolkit.fluxcd.io/driftDetection", "x")), updaterCronJob()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			newHarnessWith(t, nil, live...).wantAbstained(t, wire.ReasonGitOpsFlux, "0.1.0")
+		})
+	}
+}
+
+func TestRunAbstainsUnderArgoOwnership(t *testing.T) {
+	for name, meta := range map[string]func(*metav1.ObjectMeta){
+		"tracking-id": withAnnotation("argocd.argoproj.io/tracking-id", "agent:apps/Deployment:ns/agent"),
+		"instance":    withLabel("argocd.argoproj.io/instance", "agent"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			newHarnessWith(t, nil, agentDeployment(defaultImage+":0.1.0", meta), updaterCronJob()).
+				wantAbstained(t, wire.ReasonGitOpsArgo, "0.1.0")
+		})
+	}
+}
+
+// O Argo renderiza o chart e aplica os manifestos: não existe release do Helm no cluster.
+// A abstenção não pode depender dela, e a versão sai da tag da imagem.
+func TestRunAbstainsUnderArgoWithoutHelmRelease(t *testing.T) {
+	h := newHarnessWith(t, nil,
+		agentDeployment(defaultImage+":0.1.7@sha256:abc", withLabel("argocd.argoproj.io/instance", "agent")), updaterCronJob())
+	if _, err := h.cfg.Releases.Delete(releaseName, 1); err != nil {
+		t.Fatal(err)
+	}
+	h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+	if err := h.u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if rep := h.wantReports(t, wire.OutcomeAbstained); rep[0].Reason != wire.ReasonGitOpsArgo || rep[0].Version != "0.1.7" {
+		t.Fatalf("relato: %+v", rep[0])
+	}
+}
+
+func TestRunAbstainsOnMirroredRegistry(t *testing.T) {
+	for _, image := range []string{
+		"registry.interno.example/nuvemcash/agent:0.1.0",
+		"localhost:5000/agent:0.1.0",
+		"registry.interno.example/agent@sha256:abc",
+	} {
+		t.Run(image, func(t *testing.T) {
+			newHarnessWith(t, nil, agentDeployment(image), updaterCronJob()).
+				wantAbstained(t, wire.ReasonMirroredRegistry, "0.1.0")
+		})
+	}
+}
+
+func TestRunDoesNotAbstainOnDefaultRegistryOrUnrelatedMetadata(t *testing.T) {
+	for name, image := range map[string]string{"tag": defaultImage + ":0.1.0", "digest": defaultImage + ":0.1.0@sha256:abc", "no tag": defaultImage} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarnessWith(t, nil,
+				agentDeployment(image, withLabel("app.kubernetes.io/instance", "agent"), withAnnotation("helm.sh/resource-policy", "keep")), updaterCronJob())
+			h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+			if err := h.u.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			h.wantReports(t, wire.OutcomeApplied)
+		})
+	}
 }
