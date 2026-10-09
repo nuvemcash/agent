@@ -125,7 +125,7 @@ func validReport(r wire.AgentUpdateReport) bool {
 		return strings.TrimSpace(r.Reason) != ""
 	case wire.OutcomeAbstained:
 		switch r.Reason {
-		case "gitops_flux", "gitops_argo", "mirrored_registry", "disabled":
+		case wire.ReasonGitOpsFlux, wire.ReasonGitOpsArgo, wire.ReasonMirroredRegistry, wire.ReasonDisabled:
 			return true
 		}
 	}

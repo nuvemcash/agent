@@ -23,6 +23,7 @@ import (
 	"helm.sh/helm/v4/pkg/release"
 	rspb "helm.sh/helm/v4/pkg/release/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/nuvemcash/agent/wire"
 )
@@ -35,8 +36,10 @@ const maxHistory = 10
 
 // Updater executa UMA rodada de atualização automática da release do agente.
 type Updater struct {
-	API       API
-	Helm      *action.Configuration
+	API  API
+	Helm *action.Configuration
+	// Kube lê os recursos da release (só leitura) para decidir a abstenção.
+	Kube      kubernetes.Interface
 	Release   string
 	Namespace string
 	// Fetch baixa o chart do alvo pelo digest (OCIFetcher em produção).
@@ -48,10 +51,18 @@ type Updater struct {
 	PendingLimit time.Duration
 }
 
-// Run devolve erro só quando a rodada não conseguiu chegar a um desfecho (api fora,
+// Run começa pela abstenção (abstain.go): release de GitOps ou de registry espelhado não é
+// tocada. Devolve erro só quando a rodada não conseguiu chegar a um desfecho (api fora,
 // chart inacessível, Helm sem acesso); upgrade revertido ou recusado pelo teto é desfecho
 // relatado, não erro.
 func (u *Updater) Run(ctx context.Context) error {
+	reason, version, err := u.abstention(ctx)
+	if err != nil {
+		return err
+	}
+	if reason != "" {
+		return u.reportAbstention(ctx, reason, version)
+	}
 	installed, ok, err := u.installedVersion()
 	if err != nil || !ok {
 		return err
