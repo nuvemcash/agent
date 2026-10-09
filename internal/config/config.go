@@ -4,13 +4,24 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"time"
 )
 
+// logLevels aceita só os nomes minúsculos do chart; qualquer outro valor falha na partida.
+var logLevels = map[string]slog.Level{
+	"debug": slog.LevelDebug,
+	"info":  slog.LevelInfo,
+	"warn":  slog.LevelWarn,
+	"error": slog.LevelError,
+}
+
 type Config struct {
 	MetricsEnabled bool
+	LogFormat      string        // "json" (default) ou "text"
+	LogLevel       slog.Level    // debug, info (default), warn ou error
 	Token          string        // token de conexão do cluster (nunca logar)
 	URL            string        // base do ingest (default: https://ingest.nuvem.cash)
 	ScrapeInterval time.Duration // kubelet Summary por nó
@@ -25,6 +36,7 @@ type Config struct {
 func Load() (Config, error) {
 	c := Config{
 		MetricsEnabled: true,
+		LogFormat:      getenvDefault("NUVEMCASH_AGENT_LOG_FORMAT", "json"),
 		Token:          os.Getenv("NUVEMCASH_AGENT_TOKEN"),
 		URL:            getenvDefault("NUVEMCASH_AGENT_URL", "https://ingest.nuvem.cash"),
 		ScrapeInterval: 60 * time.Second,
@@ -38,6 +50,15 @@ func Load() (Config, error) {
 	if c.Token == "" {
 		return Config{}, errors.New("NUVEMCASH_AGENT_TOKEN é obrigatório")
 	}
+	if c.LogFormat != "json" && c.LogFormat != "text" {
+		return Config{}, fmt.Errorf("NUVEMCASH_AGENT_LOG_FORMAT inválido: %q (use json ou text)", c.LogFormat)
+	}
+	levelName := getenvDefault("NUVEMCASH_AGENT_LOG_LEVEL", "info")
+	level, ok := logLevels[levelName]
+	if !ok {
+		return Config{}, fmt.Errorf("NUVEMCASH_AGENT_LOG_LEVEL inválido: %q (use debug, info, warn ou error)", levelName)
+	}
+	c.LogLevel = level
 	var err error
 	if v := os.Getenv("NUVEMCASH_AGENT_METRICS_ENABLED"); v != "" {
 		c.MetricsEnabled, err = strconv.ParseBool(v)

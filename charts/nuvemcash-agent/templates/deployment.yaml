@@ -6,6 +6,8 @@
 */}}
 {{- $probes := .Values.probes | default dict }}
 {{- $probeHint := "bloco `probes` ausente nos values: em upgrade de um release anterior a 0.2.2, troque --reuse-values por --reset-then-reuse-values" }}
+{{- /* Sem o bloco `logging` (release anterior ao --reuse-values), vale o default do processo: json/info. */}}
+{{- $logging := .Values.logging | default dict }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -52,6 +54,10 @@ spec:
               value: {{ .Values.scrapeInterval | quote }}
             - name: NUVEMCASH_AGENT_SHIP_INTERVAL
               value: {{ .Values.shipInterval | quote }}
+            - name: NUVEMCASH_AGENT_LOG_FORMAT
+              value: {{ $logging.format | default "json" | quote }}
+            - name: NUVEMCASH_AGENT_LOG_LEVEL
+              value: {{ $logging.level | default "info" | quote }}
           ports:
             - {name: health, containerPort: 8080}
           # /healthz responde assim que o processo sobe; /readyz só depois que os caches

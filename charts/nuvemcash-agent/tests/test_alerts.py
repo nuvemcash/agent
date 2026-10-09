@@ -36,6 +36,23 @@ for apis in [(), (POD,), (RULE,), (POD, RULE)]:
     assert {v["name"]: v.get("value") for v in env}["NUVEMCASH_AGENT_METRICS_ENABLED"] == "true"
 print("Matriz de CRDs e métricas padrão: OK")
 
+# Logs: JSON/info por padrão, override renderizado no processo e valor fora do contrato recusado pelo schema.
+def agent_env(docs):
+    dep = next(d for d in docs if d["kind"] == "Deployment")
+    return {v["name"]: v.get("value") for v in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+env = agent_env(render())
+assert env["NUVEMCASH_AGENT_LOG_FORMAT"] == "json" and env["NUVEMCASH_AGENT_LOG_LEVEL"] == "info", env
+env = agent_env(render(overrides=("logging.format=text", "logging.level=debug")))
+assert env["NUVEMCASH_AGENT_LOG_FORMAT"] == "text" and env["NUVEMCASH_AGENT_LOG_LEVEL"] == "debug", env
+for bad in ("logging.format=yaml", "logging.level=trace"):
+    try:
+        render(overrides=(bad,))
+    except subprocess.CalledProcessError:
+        continue
+    raise AssertionError(f"{bad} devia ser recusado pelo schema")
+print("Logs do agente: default json/info, override e recusa de valor inválido: OK")
+
 # Token-only continua instalável com qualquer combinação de CRDs.
 for apis in [(), (POD,), (RULE,), (POD, RULE)]:
     docs = render(apis, overrides=("monitoring.cluster=",), upgrade=True)

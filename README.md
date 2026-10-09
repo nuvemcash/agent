@@ -43,6 +43,23 @@ mínimo sobre os recursos listados acima.
 
 Kubernetes ≥ 1.28 · Helm ≥ 3.8 · saída HTTPS para o endpoint do nuvem.cash.
 
+## Logs
+
+O agente escreve logs estruturados no stderr. O padrão é JSON, para pipelines de log
+interpretarem cada linha; `text` deixa a saída legível direto no `kubectl logs`.
+
+```yaml
+logging:
+  format: json    # json (padrão) ou text
+  level: info     # debug, info, warn ou error
+```
+
+Nos values, `logging.format` e `logging.level` são validados pelo schema do chart; valores
+fora da lista recusam o `helm install`/`upgrade`. No processo, as variáveis são
+`NUVEMCASH_AGENT_LOG_FORMAT` e `NUVEMCASH_AGENT_LOG_LEVEL`. Um valor inválido faz o agente
+sair na partida com mensagem citando a variável, sem cair num default silencioso. Como as
+chaves novas têm default, upgrades com `--reuse-values` continuam funcionando e usam json/info.
+
 ## Desenvolvimento
 
 Teste e2e local — builda a imagem, sobe um cluster [kind](https://kind.sigs.k8s.io/),
