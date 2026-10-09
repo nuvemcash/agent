@@ -55,6 +55,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # Helm fixado: o do runner muda sem aviso, e o Helm 3 escreve o "Digest:" do push no
+      # stderr, o 4 no stdout. O 2>&1 abaixo cobre os dois; a versão fixa evita a surpresa.
+      - uses: azure/setup-helm@v5
+        with:
+          version: v4.3.0
       - uses: sigstore/cosign-installer@v4
       # O cosign publica a assinatura com as credenciais do docker, não as do helm.
       - uses: docker/login-action@v4
@@ -69,7 +74,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           helm package charts/nuvemcash-agent --version "$VERSION" --app-version "$VERSION"
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          helm push "nuvemcash-agent-${VERSION}.tgz" oci://ghcr.io/nuvemcash/charts | tee push.log
+          helm push "nuvemcash-agent-${VERSION}.tgz" oci://ghcr.io/nuvemcash/charts 2>&1 | tee push.log
           DIGEST=$(awk '/^Digest:/ {print $2}' push.log)
           test -n "$DIGEST"
           cosign sign --yes "ghcr.io/nuvemcash/charts/nuvemcash-agent@${DIGEST}"
