@@ -6,8 +6,8 @@
 # local, aplica o chart inteiro N→N+1 preservando token e values, reverte uma imagem
 # quebrada (rolled_back), é recusado ao pedir RBAC acima do teto (rejected_by_ceiling, com
 # a ClusterRole intacta), atualiza a própria imagem e se abstém quando a release é do Flux
-# (abstained, sem tocar na release). A troca de pods não mede os mesmos
-# segundos duas vezes.
+# (abstained, sem tocar na release). Desligada, o coletor relata abstained/disabled. A
+# troca de pods não mede os mesmos segundos duas vezes.
 #
 # CLUSTER e REGISTRY permitem isolar execuções paralelas; o script não apaga nada ao fim.
 set -euo pipefail
@@ -204,5 +204,16 @@ kubectl logs deploy/devsink | grep "agent-update outcome version=$V1 outcome=abs
 [ "$(helm history $REL -n $NS -o json | jq length)" = "$REV_BEFORE" ] || fail "a abstenção escreveu na release"
 [ "$(release | jq -r .version)" = $V1 ] || fail "release não ficou em $V1"
 echo "== abstenção sob Flux OK =="
+
+# --- Desligada: sem CronJob não há updater para relatar; o coletor relata ao subir.
+helm upgrade $REL "$WORK/$V1/$REL-$V1.tgz" -n $NS --reuse-values --set autoUpgrade.enabled=false >/dev/null
+kubectl -n $NS rollout status deploy/$REL --timeout=120s
+kubectl -n $NS get cronjob $REL-updater >/dev/null 2>&1 && fail "autoUpgrade.enabled=false ainda tem CronJob"
+for _ in $(seq 1 30); do
+  kubectl logs deploy/devsink | grep "agent-update outcome version=$V1 outcome=abstained reason=\"disabled\"" >/dev/null && break
+  sleep 2
+done
+want_outcome $V1 "abstained reason=\"disabled\""
+echo "== desligada relatada pelo coletor OK =="
 
 echo "== e2e OK =="
