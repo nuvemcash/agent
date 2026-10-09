@@ -100,3 +100,26 @@ func TestSnapshot_JSONGolden(t *testing.T) {
 		}
 	})
 }
+
+// O contrato com o updater espelha a api (api#325): rotas e nomes JSON são estáveis.
+func TestAgentUpdate_JSONGolden(t *testing.T) {
+	if wire.AgentUpdateTargetPath != "/ingest/k8s/v1/agent-update/target" ||
+		wire.AgentUpdateOutcomePath != "/ingest/k8s/v1/agent-update/outcome" {
+		t.Fatalf("rotas mudaram: %s %s", wire.AgentUpdateTargetPath, wire.AgentUpdateOutcomePath)
+	}
+	b, err := json.Marshal(wire.AgentUpdateTarget{Version: "0.5.0", ChartDigest: "sha256:abc"})
+	if err != nil || string(b) != `{"version":"0.5.0","chartDigest":"sha256:abc"}` {
+		t.Fatalf("target: %s %v", b, err)
+	}
+	b, err = json.Marshal(wire.AgentUpdateReport{Version: "0.5.0", Outcome: wire.OutcomeRolledBack, Reason: "timeout"})
+	if err != nil || string(b) != `{"version":"0.5.0","outcome":"rolled_back","reason":"timeout"}` {
+		t.Fatalf("report: %s %v", b, err)
+	}
+	for o, want := range map[wire.AgentUpdateOutcome]string{
+		wire.OutcomeApplied: "applied", wire.OutcomeRejectedByCeiling: "rejected_by_ceiling", wire.OutcomeAbstained: "abstained",
+	} {
+		if string(o) != want {
+			t.Fatalf("outcome %q != %q", o, want)
+		}
+	}
+}

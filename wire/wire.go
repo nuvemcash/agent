@@ -106,3 +106,41 @@ type LoadBalancer struct {
 	Annotations map[string]string `json:"annotations,omitempty"`
 	Ingress     []string          `json:"ingress,omitempty"`
 }
+
+// Rotas da atualização automática (spec api#316, ADR 0017), no mesmo host e com o mesmo
+// Bearer do ingest. A api tem os mesmos literais em adapterhttp.AgentUpdate*Path.
+const (
+	// AgentUpdateTargetPath: GET ?agentVersion=<instalada>. 200 com AgentUpdateTarget
+	// quando há versão alvo; 204 quando não há nada a fazer.
+	AgentUpdateTargetPath = "/ingest/k8s/v1/agent-update/target"
+	// AgentUpdateOutcomePath: POST com AgentUpdateReport; 204 no aceite.
+	AgentUpdateOutcomePath = "/ingest/k8s/v1/agent-update/outcome"
+)
+
+// AgentUpdateTarget é a versão que a api indica ao cluster. O updater aplica o chart pelo
+// digest, nunca pela tag — uma tag movida no registry não chega ao cluster.
+type AgentUpdateTarget struct {
+	Version     string `json:"version"` // sem o prefixo "v"
+	ChartDigest string `json:"chartDigest"`
+}
+
+// AgentUpdateOutcome é o desfecho de uma tentativa de atualização automática.
+type AgentUpdateOutcome string
+
+const (
+	OutcomeApplied AgentUpdateOutcome = "applied"
+	// OutcomeRolledBack exige Reason (a api recusa vazio).
+	OutcomeRolledBack AgentUpdateOutcome = "rolled_back"
+	// OutcomeRejectedByCeiling: a versão pede permissão além do teto e só sobe num upgrade
+	// manual, com o consentimento do cliente.
+	OutcomeRejectedByCeiling AgentUpdateOutcome = "rejected_by_ceiling"
+	// OutcomeAbstained exige Reason em {gitops_flux, gitops_argo, mirrored_registry, disabled}.
+	OutcomeAbstained AgentUpdateOutcome = "abstained"
+)
+
+// AgentUpdateReport é o relato de desfecho enviado à api.
+type AgentUpdateReport struct {
+	Version string             `json:"version"`
+	Outcome AgentUpdateOutcome `json:"outcome"`
+	Reason  string             `json:"reason"`
+}
