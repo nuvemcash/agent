@@ -29,6 +29,7 @@ import (
 	"github.com/nuvemcash/agent/internal/config"
 	"github.com/nuvemcash/agent/internal/devsink"
 	"github.com/nuvemcash/agent/internal/ship"
+	"github.com/nuvemcash/agent/internal/update"
 	"github.com/nuvemcash/agent/wire"
 )
 
@@ -82,6 +83,10 @@ func run(cfg config.Config) error {
 	shipper := ship.New(cfg.URL, cfg.Token, cfg.BufferWindows, cfg.BufferBytes)
 	health := &collectionHealth{}
 	go serveProbes(&ready, shipper, health, cfg.MetricsEnabled)
+	if !cfg.AutoUpgradeEnabled {
+		api := update.API{URL: cfg.URL, Token: cfg.Token, Client: &http.Client{Timeout: 30 * time.Second}}
+		go func() { _ = update.ReportDisabled(ctx, api, version, time.Minute) }() // o erro é só o fim do ctx
+	}
 
 	rc, err := rest.InClusterConfig()
 	if err != nil {

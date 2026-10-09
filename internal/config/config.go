@@ -31,17 +31,22 @@ type Config struct {
 	// janelas não sabe quão grande é o cluster, e num cluster grande as 144 janelas nominais
 	// não cabiam nos 256Mi do container. Vale o que estourar primeiro.
 	BufferBytes int
+	// AutoUpgradeEnabled espelha autoUpgrade.enabled do chart. Desligada, não há updater
+	// para relatar nada, e é o coletor que conta à api (update.ReportDisabled). Sem a env
+	// (chart anterior à atualização automática) vale ligada: não relata nada.
+	AutoUpgradeEnabled bool
 }
 
 func Load() (Config, error) {
 	c := Config{
-		MetricsEnabled: true,
-		LogFormat:      getenvDefault("NUVEMCASH_AGENT_LOG_FORMAT", "json"),
-		Token:          os.Getenv("NUVEMCASH_AGENT_TOKEN"),
-		URL:            getenvDefault("NUVEMCASH_AGENT_URL", "https://ingest.nuvem.cash"),
-		ScrapeInterval: 60 * time.Second,
-		ShipInterval:   5 * time.Minute,
-		BufferWindows:  144,
+		MetricsEnabled:     true,
+		AutoUpgradeEnabled: true,
+		LogFormat:          getenvDefault("NUVEMCASH_AGENT_LOG_FORMAT", "json"),
+		Token:              os.Getenv("NUVEMCASH_AGENT_TOKEN"),
+		URL:                getenvDefault("NUVEMCASH_AGENT_URL", "https://ingest.nuvem.cash"),
+		ScrapeInterval:     60 * time.Second,
+		ShipInterval:       5 * time.Minute,
+		BufferWindows:      144,
 		// 32 MiB comprimidos: a ~250 KB por janela de cluster grande dá ~130 janelas (~11h a
 		// cada 5 min), perto das 12h nominais, e sobra folga confortável dentro dos 256Mi
 		// depois dos caches do informer.
@@ -64,6 +69,11 @@ func Load() (Config, error) {
 		c.MetricsEnabled, err = strconv.ParseBool(v)
 		if err != nil {
 			return Config{}, fmt.Errorf("NUVEMCASH_AGENT_METRICS_ENABLED inválido: %q", v)
+		}
+	}
+	if v := os.Getenv("NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED"); v != "" {
+		if c.AutoUpgradeEnabled, err = strconv.ParseBool(v); err != nil {
+			return Config{}, fmt.Errorf("NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED inválido: %q", v)
 		}
 	}
 	if c.ScrapeInterval, err = durationDefault("NUVEMCASH_AGENT_SCRAPE_INTERVAL", c.ScrapeInterval); err != nil {

@@ -88,3 +88,21 @@ func TestLoadUpdaterOverrides(t *testing.T) {
 		t.Fatal("booleano inválido devia falhar")
 	}
 }
+
+func TestAutoUpgradeDefaultAndOptOut(t *testing.T) {
+	t.Setenv("NUVEMCASH_AGENT_TOKEN", "tok")
+	t.Setenv("NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED", "")
+	cfg, err := Load()
+	if err != nil || !cfg.AutoUpgradeEnabled {
+		t.Fatalf("sem a env (chart antigo), a atualização automática vale ligada: %+v, %v", cfg, err)
+	}
+	t.Setenv("NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED", "false")
+	cfg, err = Load()
+	if err != nil || cfg.AutoUpgradeEnabled {
+		t.Fatalf("desligada deve ser respeitada: %+v, %v", cfg, err)
+	}
+	t.Setenv("NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED", "talvez")
+	if _, err := Load(); err == nil {
+		t.Fatal("booleano inválido deve ser recusado")
+	}
+}

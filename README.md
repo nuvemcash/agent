@@ -73,7 +73,8 @@ helm upgrade nuvemcash-agent oci://ghcr.io/nuvemcash/charts/nuvemcash-agent \
 ```
 
 Desligado, o chart não renderiza o `CronJob` nem nenhuma permissão do updater, e você
-atualiza o agente à mão. Use `--reset-then-reuse-values` (não `--reuse-values`) em upgrades
+atualiza o agente à mão. O coletor avisa o nuvem.cash do desligamento ao subir, e a aba
+Clusters mostra a atualização automática como desligada. Use `--reset-then-reuse-values` (não `--reuse-values`) em upgrades
 vindos de um release anterior à atualização automática: o `--reuse-values` não traz os
 defaults do chart novo.
 

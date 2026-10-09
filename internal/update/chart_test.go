@@ -2,6 +2,7 @@ package update_test
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -104,6 +105,27 @@ func TestChartWithoutAutoUpgradeRendersNoUpdater(t *testing.T) {
 	for _, o := range r.objs {
 		if m, ok := o.(interface{ GetName() string }); ok && strings.HasSuffix(m.GetName(), "-updater") {
 			t.Fatalf("autoUpgrade.enabled=false ainda renderiza %T %s", o, m.GetName())
+		}
+	}
+}
+
+// Com o updater desligado não há CronJob para relatar nada: quem conta à api é o coletor,
+// e para isso o chart lhe diz se a atualização automática está ligada.
+func TestChartTellsCollectorWhetherAutoUpgradeIsEnabled(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		r := render(t, map[string]any{"autoUpgrade": map[string]any{"enabled": enabled}})
+		dep, ok := find[*appsv1.Deployment](r, releaseName)
+		if !ok {
+			t.Fatal("Deployment do coletor ausente")
+		}
+		got := ""
+		for _, e := range dep.Spec.Template.Spec.Containers[0].Env {
+			if e.Name == "NUVEMCASH_AGENT_AUTO_UPGRADE_ENABLED" {
+				got = e.Value
+			}
+		}
+		if want := strconv.FormatBool(enabled); got != want {
+			t.Fatalf("autoUpgrade.enabled=%v: env do coletor = %q, quer %q", enabled, got, want)
 		}
 	}
 }
