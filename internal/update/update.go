@@ -56,6 +56,8 @@ type Updater struct {
 // chart inacessível, Helm sem acesso); upgrade revertido ou recusado pelo teto é desfecho
 // relatado, não erro.
 func (u *Updater) Run(ctx context.Context) error {
+	// Manager do helm CLI: compartilha ownership com os applies manuais, nos dois sentidos (api#316).
+	kube.ManagedFieldsManager = "helm"
 	reason, version, err := u.abstention(ctx)
 	if err != nil {
 		return err
