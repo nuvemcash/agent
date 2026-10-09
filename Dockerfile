@@ -1,5 +1,5 @@
 # Build multi-arch: buildx passa TARGETOS/TARGETARCH; binário estático (CGO off).
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM registry.nuvem.online/dockerhub/library/golang:1.26 AS build
 ARG TARGETOS TARGETARCH VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
