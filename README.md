@@ -135,7 +135,7 @@ mínimo sobre os recursos listados acima.
 
 ## Requisitos
 
-Kubernetes ≥ 1.28 · Helm ≥ 3.8 · saída HTTPS para o endpoint do nuvem.cash.
+Kubernetes ≥ 1.28 · Helm ≥ 3.14 (por causa de `--reset-then-reuse-values`) · saída HTTPS para o endpoint do nuvem.cash.
 
 ## Logs
 
