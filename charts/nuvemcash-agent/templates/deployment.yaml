@@ -16,6 +16,22 @@ metadata:
   labels: {app.kubernetes.io/name: nuvemcash-agent, app.kubernetes.io/instance: {{ .Release.Name | quote }}}
 spec:
   replicas: 1
+  # Rolling update sem indisponibilidade: o pod novo fica pronto antes de o antigo sair, e
+  # o coletor nunca fica fora do ar na troca de versão (atualização automática, ADR 0017).
+  #
+  # Os dois pods convivem sem medir os mesmos segundos — e isso importa, porque o ingest
+  # SOMA as janelas por hora e sobreposição contaria em dobro. O pod novo só conta a partir
+  # do primeiro scrape, que acontece um scrapeInterval depois de os caches sincronizarem
+  # (/readyz); o antigo para de raspar no SIGTERM, que chega logo depois de o Kubernetes
+  # ver o novo pronto (até startup.periodSeconds + readiness.periodSeconds após o /readyz).
+  # Não há dupla contagem enquanto scrapeInterval > startup.periodSeconds +
+  # readiness.periodSeconds (default: 60s > 35s); o e2e (hack/e2e-kind.sh) confere isso
+  # pelas janelas que chegam ao ingest. A troca perde no máximo um intervalo de scrape, que
+  # vira "não monitorado"; Recreate foi descartado porque a lacuna dele (término + sincronização +
+  # base) é maior.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
   selector:
     matchLabels: {app.kubernetes.io/name: nuvemcash-agent}
   template:
@@ -38,7 +54,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: agent
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "nuvemcash-agent.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: NUVEMCASH_AGENT_METRICS_ENABLED

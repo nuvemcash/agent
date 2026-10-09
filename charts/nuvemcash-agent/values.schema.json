@@ -108,6 +108,25 @@
       "additionalProperties": {
         "type": "string"
       }
+    },
+    "autoUpgrade": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "chart": {
+          "type": "string",
+          "pattern": "^oci://"
+        },
+        "plainHTTP": {
+          "type": "boolean"
+        },
+        "timeout": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     }
   }
 }
