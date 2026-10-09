@@ -42,20 +42,22 @@ func main() {
 		}
 		return
 	}
-	if err := run(); err != nil {
+	cfg, err := config.Load()
+	if err != nil {
+		// Antes do logger do processo: o formato pode ser justamente o valor inválido.
+		fmt.Fprintln(os.Stderr, "agent:", err)
+		os.Exit(1)
+	}
+	slog.SetDefault(slog.New(newLogHandler(os.Stderr, cfg.LogFormat, cfg.LogLevel)))
+	if err := run(cfg); err != nil {
 		slog.Error("agent exited with error", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(cfg config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
 
 	// As probes sobem ANTES de qualquer trabalho de partida. Sincronizar os informers
 	// leva dezenas de segundos em cluster grande, e enquanto a porta não estiver no ar o
