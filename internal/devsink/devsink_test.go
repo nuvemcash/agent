@@ -15,7 +15,7 @@ import (
 
 func TestHandler_AceitaGzipELogaResumo(t *testing.T) {
 	var log strings.Builder
-	h := Handler(&log, wire.AgentUpdateTarget{})
+	h := Handler(&log, nil)
 
 	snap := wire.Snapshot{SchemaVersion: 1, ClusterUID: "c1", AgentVersion: "0.1.0",
 		WindowStart: time.Unix(0, 0).UTC(), WindowEnd: time.Unix(300, 0).UTC(),
@@ -53,32 +53,40 @@ func agentUpdate(t *testing.T, h http.Handler, method, path, body, auth string) 
 	return w, w.Body.String()
 }
 
-// O devsink simula o contrato da api (api#325) no e2e: o alvo configurado é oferecido a
-// quem não está nele, e o desfecho é validado e logado.
+// O devsink simula o contrato da api (api#325) no e2e: oferece a primeira versão do
+// catálogo acima da instalada que não falhou neste cluster, e valida e loga o desfecho.
 func TestHandlerServesAgentUpdateTarget(t *testing.T) {
 	var log strings.Builder
-	h := Handler(&log, wire.AgentUpdateTarget{Version: "0.1.1", ChartDigest: "sha256:abc"})
+	h := Handler(&log, []wire.AgentUpdateTarget{
+		{Version: "0.1.1", ChartDigest: "sha256:a"}, {Version: "0.1.2", ChartDigest: "sha256:b"},
+	})
 	path := wire.AgentUpdateTargetPath + "?agentVersion="
+	target := func(installed string) (int, string) {
+		w, body := agentUpdate(t, h, "GET", path+installed, "", "Bearer tok")
+		return w.Code, body
+	}
 
 	if w, _ := agentUpdate(t, h, "GET", path+"0.1.0", "", ""); w.Code != http.StatusUnauthorized {
 		t.Fatalf("sem Bearer: quer 401, veio %d", w.Code)
 	}
-	w, body := agentUpdate(t, h, "GET", path+"0.1.0", "", "Bearer tok")
-	if w.Code != http.StatusOK || body != `{"version":"0.1.1","chartDigest":"sha256:abc"}`+"\n" {
-		t.Fatalf("alvo: %d %q", w.Code, body)
+	if code, body := target("0.1.0"); code != http.StatusOK || body != `{"version":"0.1.1","chartDigest":"sha256:a"}`+"\n" {
+		t.Fatalf("alvo: %d %q", code, body)
 	}
-	if w, _ := agentUpdate(t, h, "GET", path+"0.1.1", "", "Bearer tok"); w.Code != http.StatusNoContent {
-		t.Fatalf("já no alvo: quer 204, veio %d", w.Code)
+	if code, body := target("v0.1.1"); code != http.StatusOK || !strings.Contains(body, `"0.1.2"`) {
+		t.Fatalf("próxima versão: %d %q", code, body)
 	}
-	empty := Handler(&log, wire.AgentUpdateTarget{})
-	if w, _ := agentUpdate(t, empty, "GET", path+"0.1.0", "", "Bearer tok"); w.Code != http.StatusNoContent {
-		t.Fatalf("sem alvo configurado: quer 204, veio %d", w.Code)
+	agentUpdate(t, h, "POST", wire.AgentUpdateOutcomePath, `{"version":"0.1.2","outcome":"rolled_back","reason":"x"}`, "Bearer tok")
+	if code, _ := target("0.1.1"); code != http.StatusNoContent {
+		t.Fatalf("versão que falhou não volta a ser oferecida: %d", code)
+	}
+	if w, _ := agentUpdate(t, Handler(&log, nil), "GET", path+"0.1.0", "", "Bearer tok"); w.Code != http.StatusNoContent {
+		t.Fatalf("catálogo vazio: quer 204, veio %d", w.Code)
 	}
 }
 
 func TestHandlerValidatesAndLogsAgentUpdateOutcome(t *testing.T) {
 	var log strings.Builder
-	h := Handler(&log, wire.AgentUpdateTarget{})
+	h := Handler(&log, nil)
 	for _, c := range []struct {
 		body string
 		want int

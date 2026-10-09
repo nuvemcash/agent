@@ -1,7 +1,8 @@
 // Package devsink é o receptor de DESENVOLVIMENTO usado no e2e da Fase 2 — o ingest real
 // (autenticado, persistente) é a Fase 3 no backend do nuvem.cash. Aceita o contrato wire,
 // responde 202 e loga um resumo legível por snapshot. Também simula o contrato da
-// atualização automática (api#325): oferece um alvo fixo e valida e loga os desfechos.
+// atualização automática (api#325): oferece versões de um catálogo, com memória de falha,
+// e valida e loga os desfechos.
 package devsink
 
 import (
@@ -11,20 +12,37 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
+
+	"golang.org/x/mod/semver"
 
 	"github.com/nuvemcash/agent/wire"
 )
 
-// Handler monta o receptor. target vazio = a api não tem nada a oferecer (204).
-func Handler(out io.Writer, target wire.AgentUpdateTarget) http.Handler {
+// Handler monta o receptor. catalog são as versões que a "api" conhece, em ordem: o alvo
+// é a primeira acima da instalada que ainda não falhou (rolled_back/rejected_by_ceiling).
+func Handler(out io.Writer, catalog []wire.AgentUpdateTarget) http.Handler {
+	var (
+		mu     sync.Mutex
+		failed = map[string]bool{}
+	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+wire.AgentUpdateTargetPath, func(w http.ResponseWriter, r *http.Request) {
 		if !bearer(w, r) {
 			return
 		}
-		installed := strings.TrimPrefix(r.URL.Query().Get("agentVersion"), "v")
+		installed := "v" + strings.TrimPrefix(r.URL.Query().Get("agentVersion"), "v")
+		mu.Lock()
+		var target wire.AgentUpdateTarget
+		for _, c := range catalog {
+			if !failed[c.Version] && semver.Compare("v"+c.Version, installed) > 0 {
+				target = c
+				break
+			}
+		}
+		mu.Unlock()
 		_, _ = fmt.Fprintf(out, "agent-update target agentVersion=%s offered=%s\n", installed, target.Version)
-		if target.Version == "" || target.Version == installed {
+		if target.Version == "" {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -41,6 +59,11 @@ func Handler(out io.Writer, target wire.AgentUpdateTarget) http.Handler {
 			w.WriteHeader(http.StatusBadRequest)
 			_, _ = io.WriteString(w, `{"code":"INVALID_OUTCOME"}`)
 			return
+		}
+		if rep.Outcome == wire.OutcomeRolledBack || rep.Outcome == wire.OutcomeRejectedByCeiling {
+			mu.Lock()
+			failed[rep.Version] = true
+			mu.Unlock()
 		}
 		_, _ = fmt.Fprintf(out, "agent-update outcome version=%s outcome=%s reason=%q\n", rep.Version, rep.Outcome, rep.Reason)
 		w.WriteHeader(http.StatusNoContent)
