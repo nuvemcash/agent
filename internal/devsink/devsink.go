@@ -60,7 +60,8 @@ func Handler(out io.Writer, catalog []wire.AgentUpdateTarget) http.Handler {
 			_, _ = io.WriteString(w, `{"code":"INVALID_OUTCOME"}`)
 			return
 		}
-		if rep.Outcome == wire.OutcomeRolledBack || rep.Outcome == wire.OutcomeRejectedByCeiling {
+		if rep.Outcome == wire.OutcomeRolledBack || rep.Outcome == wire.OutcomeRejectedByCeiling ||
+			rep.Outcome == wire.OutcomeSignatureInvalid {
 			mu.Lock()
 			failed[rep.Version] = true
 			mu.Unlock()
@@ -121,7 +122,7 @@ func validReport(r wire.AgentUpdateReport) bool {
 	switch r.Outcome {
 	case wire.OutcomeApplied, wire.OutcomeRejectedByCeiling:
 		return true
-	case wire.OutcomeRolledBack:
+	case wire.OutcomeRolledBack, wire.OutcomeSignatureInvalid:
 		return strings.TrimSpace(r.Reason) != ""
 	case wire.OutcomeAbstained:
 		switch r.Reason {
