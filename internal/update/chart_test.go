@@ -268,3 +268,33 @@ func TestUpdaterCanRewriteEveryRenderedObject(t *testing.T) {
 		}
 	}
 }
+
+// A assinatura do chart só cobre a imagem se o digest estiver dentro dele: com
+// image.digest a referência sai repo@digest, no coletor e no updater (que usam a MESMA).
+// image.tag explícito do usuário vence o digest; sem nenhum dos dois, vale o appVersion.
+func TestChartImageReference(t *testing.T) {
+	const digest = "sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	const repo = "ghcr.io/nuvemcash/agent"
+	cases := map[string]struct {
+		image map[string]any
+		want  string
+	}{
+		"digest":        {image: map[string]any{"digest": digest}, want: repo + "@" + digest},
+		"tag explícita": {image: map[string]any{"digest": digest, "tag": "custom"}, want: repo + ":custom"},
+		"sem digest":    {image: map[string]any{}, want: repo + ":0.1.0"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := render(t, map[string]any{"image": c.image})
+			dep, _ := find[*appsv1.Deployment](r, releaseName)
+			cj, _ := find[*batchv1.CronJob](r, updater)
+			got := []string{
+				dep.Spec.Template.Spec.Containers[0].Image,
+				cj.Spec.JobTemplate.Spec.Template.Spec.Containers[0].Image,
+			}
+			if got[0] != c.want || got[1] != c.want {
+				t.Fatalf("imagem do Deployment e do updater = %q; quer %q", got, c.want)
+			}
+		})
+	}
+}

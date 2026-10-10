@@ -1,6 +1,11 @@
-{{- /* Imagem do agente. O updater usa a MESMA: a imagem dele sobe junto com a do coletor. */ -}}
+{{- /* Imagem do agente. O updater usa a MESMA: a imagem dele sobe junto com a do coletor.
+     Precedência: image.tag explícito > image.digest (gravado pelo release) > appVersion. */ -}}
 {{- define "nuvemcash-agent.image" -}}
+{{- if and .Values.image.digest (not .Values.image.tag) -}}
+{{ .Values.image.repository }}@{{ .Values.image.digest }}
+{{- else -}}
 {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
 {{- end -}}
 
 {{- define "nuvemcash-agent.secretName" -}}

@@ -17,6 +17,8 @@ jobs:
   image:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }} # o job chart o grava em image.digest
     permissions:
       contents: read
       packages: write
@@ -82,8 +84,13 @@ jobs:
       - name: Publica o chart como OCI no GHCR e o assina pelo digest (cosign keyless)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
+          # Fixa a imagem por digest: a assinatura do chart passa a cobrir a imagem.
+          test -n "$IMAGE_DIGEST"
+          sed -i "s|^  digest: \"\"|  digest: \"${IMAGE_DIGEST}\"|" charts/nuvemcash-agent/values.yaml
+          grep -q "^  digest: \"${IMAGE_DIGEST}\"" charts/nuvemcash-agent/values.yaml
           helm package charts/nuvemcash-agent --version "$VERSION" --app-version "$VERSION"
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           helm push "nuvemcash-agent-${VERSION}.tgz" oci://ghcr.io/nuvemcash/charts 2>&1 | tee push.log
