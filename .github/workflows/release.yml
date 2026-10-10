@@ -14,6 +14,8 @@ jobs:
         with:
           go-version: "1.26.x"
       - run: go test ./... -race -count=1
+        env:
+          SIGSTORE_TUF_CHECK: "1" # trusted_root.json embutido = o publicado pelo TUF do Sigstore
   image:
     needs: test
     runs-on: ubuntu-latest
