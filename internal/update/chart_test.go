@@ -270,7 +270,8 @@ func TestUpdaterCanRewriteEveryRenderedObject(t *testing.T) {
 }
 
 // A assinatura do chart só cobre a imagem se o digest estiver dentro dele: com
-// image.digest a referência sai repo@digest, no coletor e no updater (que usam a MESMA).
+// image.digest a referência sai repo:appVersion@digest, no coletor e no updater (que usam a
+// MESMA). O kubelet puxa pelo digest; a tag fica para splitImage (abstenção sob Argo sem release).
 // image.tag explícito do usuário vence o digest; sem nenhum dos dois, vale o appVersion.
 func TestChartImageReference(t *testing.T) {
 	const digest = "sha256:" + "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -279,7 +280,7 @@ func TestChartImageReference(t *testing.T) {
 		image map[string]any
 		want  string
 	}{
-		"digest":        {image: map[string]any{"digest": digest}, want: repo + "@" + digest},
+		"digest":        {image: map[string]any{"digest": digest}, want: repo + ":0.1.0@" + digest},
 		"tag explícita": {image: map[string]any{"digest": digest, "tag": "custom"}, want: repo + ":custom"},
 		"sem digest":    {image: map[string]any{}, want: repo + ":0.1.0"},
 	}
