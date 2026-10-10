@@ -79,6 +79,10 @@ func TestHandlerServesAgentUpdateTarget(t *testing.T) {
 	if code, _ := target("0.1.1"); code != http.StatusNoContent {
 		t.Fatalf("versão que falhou não volta a ser oferecida: %d", code)
 	}
+	agentUpdate(t, h, "POST", wire.AgentUpdateOutcomePath, `{"version":"0.1.1","outcome":"signature_invalid","reason":"x"}`, "Bearer tok")
+	if code, _ := target("0.1.0"); code != http.StatusNoContent {
+		t.Fatalf("versão com assinatura inválida não volta a ser oferecida: %d", code)
+	}
 	if w, _ := agentUpdate(t, Handler(&log, nil), "GET", path+"0.1.0", "", "Bearer tok"); w.Code != http.StatusNoContent {
 		t.Fatalf("catálogo vazio: quer 204, veio %d", w.Code)
 	}
@@ -95,7 +99,9 @@ func TestHandlerValidatesAndLogsAgentUpdateOutcome(t *testing.T) {
 		{`{"version":"0.1.2","outcome":"rolled_back","reason":"timeout"}`, http.StatusNoContent},
 		{`{"version":"0.1.3","outcome":"rejected_by_ceiling","reason":"forbidden"}`, http.StatusNoContent},
 		{`{"version":"0.1.3","outcome":"abstained","reason":"gitops_flux"}`, http.StatusNoContent},
+		{`{"version":"0.1.4","outcome":"signature_invalid","reason":"SAN mismatch"}`, http.StatusNoContent},
 		{`{"version":"0.1.2","outcome":"rolled_back"}`, http.StatusBadRequest},
+		{`{"version":"0.1.4","outcome":"signature_invalid"}`, http.StatusBadRequest},
 		{`{"version":"0.1.3","outcome":"abstained","reason":"cansei"}`, http.StatusBadRequest},
 		{`{"version":"0.1.3","outcome":"done"}`, http.StatusBadRequest},
 		{`{"version":"","outcome":"applied"}`, http.StatusBadRequest},

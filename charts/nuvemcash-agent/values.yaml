@@ -1,6 +1,11 @@
 image:
   repository: ghcr.io/nuvemcash/agent
-  tag: ""            # default: appVersion do chart
+  tag: ""            # default: appVersion do chart; se definido, vence o digest
+  # Digest da imagem multi-arch, gravado pelo release antes do helm package: a assinatura
+  # do chart passa a cobrir a imagem. Vazio no repositório (sem digest, vale a tag).
+  # Registry espelhado que não preserva o digest do índice multi-arch: use --set image.digest=
+  # (vazio) ou fixe image.tag.
+  digest: ""
   pullPolicy: IfNotPresent
 
 connection:

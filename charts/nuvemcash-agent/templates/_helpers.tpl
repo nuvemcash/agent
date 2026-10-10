@@ -1,6 +1,13 @@
-{{- /* Imagem do agente. O updater usa a MESMA: a imagem dele sobe junto com a do coletor. */ -}}
+{{- /* Imagem do agente. O updater usa a MESMA: a imagem dele sobe junto com a do coletor.
+     Precedência: image.tag explícito > image.digest (gravado pelo release) > appVersion.
+     Com digest a tag do appVersion acompanha (repo:tag@digest): o kubelet puxa pelo digest e a
+     tag segue legível para a abstenção sob Argo (splitImage). */ -}}
 {{- define "nuvemcash-agent.image" -}}
+{{- if and .Values.image.digest (not .Values.image.tag) -}}
+{{ .Values.image.repository }}:{{ .Chart.AppVersion }}@{{ .Values.image.digest }}
+{{- else -}}
 {{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+{{- end -}}
 {{- end -}}
 
 {{- define "nuvemcash-agent.secretName" -}}

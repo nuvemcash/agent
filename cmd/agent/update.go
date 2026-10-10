@@ -49,6 +49,7 @@ func runUpdate() error {
 		Release:      cfg.Release,
 		Namespace:    cfg.Namespace,
 		Fetch:        update.OCIFetcher{Chart: cfg.Chart, PlainHTTP: cfg.PlainHTTP}.Fetch,
+		Verify:       chartVerifier(cfg.Chart, cfg.PlainHTTP),
 		Timeout:      cfg.Timeout,
 		PendingLimit: runDeadline,
 	}

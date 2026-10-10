@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -191,6 +192,9 @@ type harness struct {
 	kube    *fake.Clientset
 	u       *update.Updater
 	fetched []wire.AgentUpdateTarget
+	// verified registra cada alvo verificado; verifyErr é o desfecho da Verificação de origem.
+	verified  []wire.AgentUpdateTarget
+	verifyErr error
 }
 
 const defaultImage = "ghcr.io/nuvemcash/agent"
@@ -264,6 +268,10 @@ func newHarnessWith(t *testing.T, kc kube.Interface, live ...any) *harness {
 			h.fetched = append(h.fetched, tg)
 			return loadChart(t, tg.Version), nil
 		},
+		Verify: func(_ context.Context, tg wire.AgentUpdateTarget) error {
+			h.verified = append(h.verified, tg)
+			return h.verifyErr
+		},
 		Timeout:      time.Second,
 		PendingLimit: 15 * time.Minute,
 	}
@@ -309,6 +317,9 @@ func TestRunAppliesWholeChartByDigestPreservingValues(t *testing.T) {
 	if len(h.fetched) != 1 || h.fetched[0].ChartDigest != "sha256:feed" {
 		t.Fatalf("o chart tem de vir pelo digest do alvo: %+v", h.fetched)
 	}
+	if len(h.verified) != 1 || h.verified[0] != h.fetched[0] {
+		t.Fatalf("a origem do alvo tem de ser verificada antes do upgrade: %+v", h.verified)
+	}
 	rep := h.wantReports(t, wire.OutcomeApplied)
 	if rep[0].Version != "0.2.0" {
 		t.Fatalf("relato com a versão errada: %+v", rep[0])
@@ -324,6 +335,37 @@ func TestRunAppliesWholeChartByDigestPreservingValues(t *testing.T) {
 	// Release instalada pelo Helm 3 continua em client-side apply.
 	if rel.ApplyMethod != string(rspb.ApplyMethodClientSideApply) {
 		t.Fatalf("método de aplicação mudou para %q", rel.ApplyMethod)
+	}
+}
+
+// Assinatura inválida: nenhum upgrade, relato signature_invalid com o motivo.
+func TestRunReportsSignatureInvalidAndLeavesReleaseUntouched(t *testing.T) {
+	h := newHarness(t, nil)
+	h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+	h.verifyErr = fmt.Errorf("%w: SAN mismatch v0.2.1", update.ErrSignatureInvalid)
+	if err := h.u.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rep := h.wantReports(t, wire.OutcomeSignatureInvalid)
+	if rep[0].Version != "0.2.0" || !strings.Contains(rep[0].Reason, "SAN mismatch v0.2.1") {
+		t.Fatalf("relato sem a versão ou o motivo: %+v", rep[0])
+	}
+	if rel := last(t, h.cfg); rel.Version != 1 || rel.Chart.Metadata.Version != "0.1.0" {
+		t.Fatalf("release não pode ser tocada: revisão %d, %s", rel.Version, rel.Chart.Metadata.Version)
+	}
+}
+
+// Erro transitório (rede, 5xx do GHCR): sem relato nem upgrade; a próxima hora tenta de novo.
+func TestRunTransientVerifyErrorDoesNotReport(t *testing.T) {
+	h := newHarness(t, nil)
+	h.api.target = &wire.AgentUpdateTarget{Version: "0.2.0", ChartDigest: "sha256:feed"}
+	h.verifyErr = errors.New("ghcr: 503 service unavailable")
+	if err := h.u.Run(context.Background()); err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("erro transitório tem de voltar como erro da rodada: %v", err)
+	}
+	h.wantReports(t)
+	if rel := last(t, h.cfg); rel.Version != 1 {
+		t.Fatalf("release não pode ser tocada: revisão %d", rel.Version)
 	}
 }
 

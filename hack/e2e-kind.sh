@@ -6,7 +6,9 @@
 # local, aplica o chart inteiro N→N+1 preservando token e values, reverte uma imagem
 # quebrada (rolled_back), é recusado ao pedir RBAC acima do teto (rejected_by_ceiling, com
 # a ClusterRole intacta), atualiza a própria imagem e se abstém quando a release é do Flux
-# (abstained, sem tocar na release). Uma release cujo último apply foi do Helm 4 CLI (SSA,
+# (abstained, sem tocar na release). As imagens do cenário são do build e2e (tag e2e), cujo
+# updater pula a Verificação de origem (charts locais não têm assinatura); um updater do build
+# normal recusa o chart sem assinatura (signature_invalid, release intocada). Uma release cujo último apply foi do Helm 4 CLI (SSA,
 # field manager "helm") é atualizada sem conflito de ownership (api#316). Desligada, o coletor relata abstained/disabled. A
 # troca de pods não mede os mesmos segundos duas vezes.
 #
@@ -23,8 +25,8 @@ REL=nuvemcash-agent
 SCRAPE=10
 
 # Versões do cenário: N, N+1, N+1 com imagem inexistente, N+1 pedindo secrets (fora do teto) e
-# N+2 aplicada sobre a release em SSA do Helm 4 CLI.
-V0=0.1.0 V1=0.1.1 VBROKEN=0.1.2 VCEILING=0.1.3 VSSA=0.1.4
+# N+2 aplicada sobre a release em SSA do Helm 4 CLI e N+3 sem assinatura, para o build normal.
+V0=0.1.0 V1=0.1.1 VBROKEN=0.1.2 VCEILING=0.1.3 VSSA=0.1.4 VSIG=0.1.5
 
 fail() {
   echo "e2e FALHOU: $*" >&2
@@ -35,12 +37,14 @@ fail() {
 
 # Imagens: N e N+1 são builds distintos (a versão viaja nos snapshots e separa os pods na
 # checagem de sobreposição); a do teto e a do SSA reaproveitam N+1; a quebrada nunca é carregada.
-docker build -q --build-arg VERSION=$V0 -t $REPO:$V0 . >/dev/null
-docker build -q --build-arg VERSION=$V1 -t $REPO:$V1 . >/dev/null
+docker build -q --build-arg VERSION=$V0 --build-arg BUILD_TAGS=e2e -t $REPO:$V0 . >/dev/null
+docker build -q --build-arg VERSION=$V1 --build-arg BUILD_TAGS=e2e -t $REPO:$V1 . >/dev/null
+# Build normal (o do release): só roda o updater do cenário de assinatura.
+docker build -q --build-arg VERSION=$VSSA -t $REPO:release-build . >/dev/null
 docker tag $REPO:$V1 $REPO:$VCEILING
 docker tag $REPO:$V1 $REPO:$VSSA
 kind get clusters | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --image "$NODE_IMAGE"
-kind load docker-image $REPO:$V0 $REPO:$V1 $REPO:$VCEILING $REPO:$VSSA --name "$CLUSTER"
+kind load docker-image $REPO:$V0 $REPO:$V1 $REPO:$VCEILING $REPO:$VSSA $REPO:release-build --name "$CLUSTER"
 
 # Registra o contexto do kind explicitamente, num KUBECONFIG PRÓPRIO. Não é higiene: numa
 # máquina de trabalho o kubeconfig ambiente costuma apontar para um cluster de PRODUÇÃO, e
@@ -60,7 +64,7 @@ CHART_REF="oci://$REG_IP:5000/charts/$REL"
 
 # Empacota e publica cada versão; o digest do manifesto é o que a "api" oferece.
 WORK=$(mktemp -d)
-for v in $V0 $V1 $VBROKEN $VCEILING $VSSA; do mkdir -p "$WORK/$v" && cp -R charts/$REL "$WORK/$v/"; done
+for v in $V0 $V1 $VBROKEN $VCEILING $VSSA $VSIG; do mkdir -p "$WORK/$v" && cp -R charts/$REL "$WORK/$v/"; done
 # A versão do teto pede list em secrets na ClusterRole do coletor: além do teto do updater.
 python3 - "$WORK/$VCEILING/$REL/templates/rbac.yaml" <<'PY'
 import sys
@@ -70,7 +74,7 @@ extra = '  - apiGroups: [""]\n    resources: ["secrets"]\n    verbs: ["list"]\n-
 assert '    verbs: ["get"]\n---' in s
 open(p, "w").write(s.replace('    verbs: ["get"]\n---', '    verbs: ["get"]\n' + extra, 1))
 PY
-for v in $V0 $V1 $VBROKEN $VCEILING $VSSA; do
+for v in $V0 $V1 $VBROKEN $VCEILING $VSSA $VSIG; do
   command helm package "$WORK/$v/$REL" --version "$v" --app-version "$v" -d "$WORK/$v" >/dev/null
   command helm push "$WORK/$v/$REL-$v.tgz" "oci://127.0.0.1:$REG_PORT/charts" --plain-http 2>&1 |
     awk '/^Digest:/ {print $2}' >"$WORK/$v/digest"
@@ -82,7 +86,7 @@ done
 # a api, que não oferece de novo uma versão que falhou no cluster. Assim os cenários abaixo
 # andam N→N+1, depois a quebrada, depois a do teto, sem reiniciar o devsink (o que perderia
 # os logs que as asserções leem).
-RELEASES=$(for v in $V1 $VBROKEN $VCEILING $VSSA; do printf '%s@%s,' $v "$(cat "$WORK/$v/digest")"; done)
+RELEASES=$(for v in $V1 $VBROKEN $VCEILING $VSSA $VSIG; do printf '%s@%s,' $v "$(cat "$WORK/$v/digest")"; done)
 kubectl delete deploy devsink --ignore-not-found
 kubectl create deployment devsink --image=$REPO:$V0 -- /agent devsink
 kubectl set env deploy/devsink "NUVEMCASH_DEVSINK_AGENT_RELEASES=$RELEASES" >/dev/null
@@ -225,6 +229,20 @@ META=$(release)
   fail "token não foi preservado"
 kubectl -n $NS rollout status deploy/$REL --timeout=120s
 echo "== release em SSA do Helm 4 CLI atualizada OK =="
+
+# --- Verificação de origem: o updater do build normal recusa N+3, que não tem assinatura.
+REV=$(release | jq -r .revision)
+kubectl -n $NS create job upd-signature --from=cronjob/$REL-updater --dry-run=client -o json |
+  jq --arg img $REPO:release-build '.spec.template.spec.containers[0].image = $img |
+    .spec.template.spec.containers[0].imagePullPolicy = "Never"' |
+  kubectl apply -f - >/dev/null
+kubectl -n $NS wait --for=condition=complete job/upd-signature --timeout=180s ||
+  fail "job do updater do build normal não completou"
+want_outcome $VSIG "signature_invalid"
+META=$(release)
+[ "$(jq -r .version <<<"$META")" = $VSSA ] && [ "$(jq -r .revision <<<"$META")" = "$REV" ] ||
+  fail "chart sem assinatura mexeu na release: $META"
+echo "== chart sem assinatura recusado pela Verificação de origem OK =="
 
 # --- Desligada: sem CronJob não há updater para relatar; o coletor relata ao subir.
 helm upgrade $REL "$WORK/$V1/$REL-$V1.tgz" -n $NS --reuse-values --set autoUpgrade.enabled=false >/dev/null

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -44,6 +45,9 @@ type Updater struct {
 	Namespace string
 	// Fetch baixa o chart do alvo pelo digest (OCIFetcher em produção).
 	Fetch func(context.Context, wire.AgentUpdateTarget) (*chartv2.Chart, error)
+	// Verify confere a origem do chart do alvo (OriginVerifier em produção); obrigatório,
+	// sem opção de desligar.
+	Verify func(context.Context, wire.AgentUpdateTarget) error
 	// Timeout limita a espera de readiness do upgrade e, de novo, a do rollback.
 	Timeout time.Duration
 	// PendingLimit é a duração máxima de uma execução: uma release em pending-* há mais
@@ -80,6 +84,13 @@ func (u *Updater) Run(ctx context.Context) error {
 	ch, err := u.Fetch(ctx, target)
 	if err != nil {
 		return fmt.Errorf("fetch chart %s: %w", target.Version, err)
+	}
+	if err := u.Verify(ctx, target); errors.Is(err, ErrSignatureInvalid) {
+		slog.Error("agent update refused: chart signature invalid", "version", target.Version, "digest", target.ChartDigest, "err", err)
+		return u.API.Report(ctx, wire.AgentUpdateReport{Version: target.Version, Outcome: wire.OutcomeSignatureInvalid, Reason: err.Error()})
+	} else if err != nil {
+		// Transitório (rede, 5xx do registry): sem relato; a próxima hora tenta de novo.
+		return fmt.Errorf("verify chart %s: %w", target.Version, err)
 	}
 
 	slog.Info("applying agent update", "from", installed, "to", target.Version, "digest", target.ChartDigest)
