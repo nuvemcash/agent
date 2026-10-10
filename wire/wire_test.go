@@ -117,6 +117,7 @@ func TestAgentUpdate_JSONGolden(t *testing.T) {
 	}
 	for o, want := range map[wire.AgentUpdateOutcome]string{
 		wire.OutcomeApplied: "applied", wire.OutcomeRejectedByCeiling: "rejected_by_ceiling", wire.OutcomeAbstained: "abstained",
+		wire.OutcomeSignatureInvalid: "signature_invalid",
 	} {
 		if string(o) != want {
 			t.Fatalf("outcome %q != %q", o, want)

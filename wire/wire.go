@@ -136,6 +136,9 @@ const (
 	OutcomeRejectedByCeiling AgentUpdateOutcome = "rejected_by_ceiling"
 	// OutcomeAbstained exige Reason em {gitops_flux, gitops_argo, mirrored_registry, disabled}.
 	OutcomeAbstained AgentUpdateOutcome = "abstained"
+	// OutcomeSignatureInvalid: o chart não passou na Verificação de origem e nada foi
+	// instalado. Exige Reason (a api recusa vazio).
+	OutcomeSignatureInvalid AgentUpdateOutcome = "signature_invalid"
 )
 
 // Motivos de OutcomeAbstained (conjunto fechado, validado pela api).
