@@ -167,7 +167,10 @@ devsink`) e o chart apontando pra ele, e aguarda até um snapshot com uso chegar
 Critério de aceite da Fase 2. O mesmo script cobre a atualização automática, a partir de
 um registry OCI local: N→N+1 com token preservado, imagem quebrada revertida
 (`rolled_back`), RBAC acima do teto recusado (`rejected_by_ceiling`), a própria imagem do
-updater atualizada e a abstenção sob Flux. Precisa de `docker`, `kind`, `helm` 4, `jq` e
+updater atualizada e a abstenção sob Flux. As imagens do e2e são compiladas com a tag
+`e2e`, cujo updater pula a Verificação de origem (os charts locais não têm assinatura); um
+updater do build normal, o mesmo do release, recusa um chart sem assinatura
+(`signature_invalid`) sem tocar na release. Precisa de `docker`, `kind`, `helm` 4, `jq` e
 `python3`; `CLUSTER` e `REGISTRY` isolam execuções paralelas. O script não apaga o cluster
 ao final; para limpar: `kind delete cluster --name agent-e2e` e `docker rm -f agent-e2e-registry`.
 

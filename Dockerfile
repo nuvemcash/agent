@@ -1,12 +1,14 @@
 # Build multi-arch: buildx passa TARGETOS/TARGETARCH; binário estático (CGO off).
 FROM --platform=$BUILDPLATFORM registry.nuvem.online/dockerhub/library/golang:1.26 AS build
 ARG TARGETOS TARGETARCH VERSION=dev
+# BUILD_TAGS=e2e só no e2e local (hack/e2e-kind.sh); o release nunca o passa.
+ARG BUILD_TAGS=""
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -ldflags "-s -w -X main.version=$VERSION" -o /out/agent ./cmd/agent
+    go build -tags "$BUILD_TAGS" -ldflags "-s -w -X main.version=$VERSION" -o /out/agent ./cmd/agent
 
 # distroless static: CA certs + tzdata + usuário não-root (UID 65532) embutidos.
 # Não redeclarar USER: a base ":nonroot" já roda como UID numérica 65532 por padrão —
