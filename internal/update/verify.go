@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/sigstore/sigstore-go/pkg/bundle"
+	"github.com/sigstore/sigstore-go/pkg/fulcio/certificate"
 	"github.com/sigstore/sigstore-go/pkg/root"
 	"github.com/sigstore/sigstore-go/pkg/verify"
 	"oras.land/oras-go/v2"
@@ -29,9 +30,10 @@ import (
 var trustedRootJSON []byte
 
 const (
-	bundleMediaType = "application/vnd.dev.sigstore.bundle.v0.3+json"
-	signerIssuer    = "https://token.actions.githubusercontent.com"
-	signerWorkflow  = "https://github.com/nuvemcash/agent/.github/workflows/release.yml@refs/tags/v"
+	bundleMediaType  = "application/vnd.dev.sigstore.bundle.v0.3+json"
+	signerIssuer     = "https://token.actions.githubusercontent.com"
+	signerWorkflow   = "https://github.com/nuvemcash/agent/.github/workflows/release.yml@refs/tags/v"
+	signerRepository = "https://github.com/nuvemcash/agent"
 )
 
 // ErrSignatureInvalid marca a recusa da Verificação de origem: o chart não tem assinatura
@@ -140,7 +142,20 @@ func newPolicy(artifact []byte, version string) (*verify.Verifier, verify.Policy
 	if err != nil {
 		return nil, verify.PolicyBuilder{}, err
 	}
-	id, err := verify.NewShortCertificateIdentity(signerIssuer, "", signerWorkflow+version, "")
+	san, err := verify.NewSANMatcher(signerWorkflow+version, "")
+	if err != nil {
+		return nil, verify.PolicyBuilder{}, err
+	}
+	issuer, err := verify.NewIssuerMatcher(signerIssuer, "")
+	if err != nil {
+		return nil, verify.PolicyBuilder{}, err
+	}
+	// Repositório e ref de origem além da SAN: se o release.yml um dia virar reusable
+	// workflow, a SAN (job_workflow_ref) seria a mesma para qualquer repositório chamador.
+	id, err := verify.NewCertificateIdentity(san, issuer, certificate.Extensions{
+		SourceRepositoryURI: signerRepository,
+		SourceRepositoryRef: "refs/tags/v" + version,
+	})
 	if err != nil {
 		return nil, verify.PolicyBuilder{}, err
 	}
