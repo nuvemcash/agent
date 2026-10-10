@@ -467,6 +467,18 @@ func TestRunFailsWhenAPIRejectsToken(t *testing.T) {
 	}
 }
 
+// Sem verificador não há atualização: a Verificação de origem não se desliga por omissão.
+func TestRunWithoutVerifierFailsClosed(t *testing.T) {
+	h := newHarness(t, nil)
+	h.u.Verify = nil
+	if err := h.u.Run(context.Background()); err == nil {
+		t.Fatal("Updater sem Verify tem de falhar")
+	}
+	if last(t, h.cfg).Version != 1 {
+		t.Fatal("nada pode ser aplicado sem verificador")
+	}
+}
+
 // Um helm upgrade manual que começa entre a consulta e a aplicação não é falha da versão:
 // relatar rolled_back tiraria a versão das ofertas a este cluster para sempre.
 func TestRunConcurrentOperationIsNotAFailure(t *testing.T) {
