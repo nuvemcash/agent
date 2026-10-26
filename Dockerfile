@@ -5,6 +5,8 @@ ARG TARGETOS TARGETARCH VERSION=dev
 ARG BUILD_TAGS=""
 WORKDIR /src
 COPY go.mod go.sum ./
+# O wire é módulo próprio, ligado por replace ./wire: o download precisa do go.mod dele.
+COPY wire/go.mod wire/
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \

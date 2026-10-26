@@ -3,6 +3,7 @@ module github.com/nuvemcash/agent
 go 1.26.0
 
 require (
+	github.com/nuvemcash/agent/wire v0.0.0
 	github.com/sigstore/sigstore-go v1.3.0
 	golang.org/x/mod v0.38.0
 	helm.sh/helm/v4 v4.3.0
@@ -167,3 +168,7 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
 )
+
+// O wire é módulo próprio (só stdlib) para a api não herdar o grafo k8s.io; o agente o
+// consome da árvore local. Consumidores externos requerem a tag wire/vX.Y.Z.
+replace github.com/nuvemcash/agent/wire => ./wire
