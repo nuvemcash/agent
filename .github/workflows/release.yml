@@ -16,6 +16,8 @@ jobs:
       - run: go test ./... -race -count=1
         env:
           SIGSTORE_TUF_CHECK: "1" # trusted_root.json embutido = o publicado pelo TUF do Sigstore
+      - run: go test ./... -race -count=1
+        working-directory: wire
   image:
     needs: test
     runs-on: ubuntu-latest

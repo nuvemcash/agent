@@ -16,6 +16,9 @@ jobs:
       - run: go build ./... && go test ./... -race -count=1
         env:
           SIGSTORE_TUF_CHECK: "1" # trusted_root.json embutido = o publicado pelo TUF do Sigstore
+      # wire/ é módulo próprio: o ./... da raiz não o alcança.
+      - run: go build ./... && go test ./... -race -count=1
+        working-directory: wire
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -26,6 +29,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12
+          working-directory: wire
   monitoring:
     name: Métricas e regras locais
     runs-on: ubuntu-latest
