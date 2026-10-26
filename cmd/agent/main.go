@@ -33,7 +33,7 @@ import (
 	"github.com/nuvemcash/agent/wire"
 )
 
-var version = "dev" // injetada por -ldflags "-X main.version=vX.Y.Z"
+var version = "dev" // injetada por -ldflags "-X main.version=X.Y.Z" (sem o "v": o release normaliza a tag)
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "devsink" {
